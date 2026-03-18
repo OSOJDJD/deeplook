@@ -174,4 +174,4 @@ Eval framework ships in `/eval` — run it yourself, contribute ground truth dat
 
 MIT — use it however you want.
 
-Built by [@tysenpa1](https://x.com/tysenpa1) · [Open an issue](https://github.com/OSOJDJD/deeplook/issues) if something breaks or a report looks wrong.
+Built by [@OSOJDJD](https://github.com/OSOJDJD) · [Open an issue](https://github.com/OSOJDJD/deeplook/issues) if something breaks or a report looks wrong.
