@@ -1,0 +1,52 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Generated outputs
+deeplook/output/*.json
+deeplook/eval/results_*.json
+deeplook/eval/results_batch_*.json
+deeplook/eval/summary_*.md
+deeplook/eval/eval_cache.db
+deeplook/eval/runs/
+
+# Logs
+*.log
+deeplook/logs/
+
+# Runtime data (usage tracking, etc.)
+data/
+
+# Documents
+*.pdf
+*.docx
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local settings
+.claude/
+deeplook/.claude/
+
+# Legacy prompt versions
+deeplook/judgment/prompt.py
+deeplook/judgment/prompt_v*.py

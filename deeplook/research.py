@@ -1,0 +1,899 @@
+"""
+Main entry point for the DeepLook company research agent.
+
+Usage: python deeplook/research.py "Blockstream"
+"""
+
+import asyncio
+import io
+import json
+import os
+import sys
+import time
+from contextlib import redirect_stdout
+from datetime import date
+from pathlib import Path
+
+import httpx
+import yfinance as yf
+from dotenv import load_dotenv
+
+from deeplook.fetchers.website import fetch_website
+from deeplook.fetchers.news import fetch_news
+from deeplook.fetchers.rootdata import fetch_rootdata
+from deeplook.fetchers.coingecko import fetch_coingecko
+from deeplook.fetchers.defillama import fetch_defillama, _resolve_defillama_slug
+from deeplook.fetchers.yfinance_data import fetch_yfinance, fetch_yfinance_news, _resolve_ticker, fetch_peer_data
+from deeplook.fetchers.wikipedia import fetch_wikipedia
+from deeplook.fetchers.youtube import fetch_youtube
+from deeplook.fetchers.sec_edgar import fetch_sec_edgar
+from deeplook.fetchers.finnhub_fetcher import fetch_finnhub
+from deeplook.fetchers.search_strategy import (
+    build_search_queries,
+    get_active_fetchers,
+    get_time_limits,
+    get_fetcher_limits,
+    validate_result,
+    deduplicate_news,
+    rank_articles,
+)
+from deeplook.judgment.synthesize import synthesize
+from deeplook.formatter import format_report, format_layer1
+
+
+PROJECT_ROOT = Path(__file__).parent.parent
+
+
+# ── Defunct / collapsed companies (hardcoded) ─────────────────────────────
+# These are definitively dead — skip all financial detection, force DISTRESS phase.
+DEFUNCT_COMPANIES = {
+    "terra luna", "luna", "ftx", "wework", "theranos", "celsius",
+    "celsius network", "three arrows capital", "3ac", "voyager digital",
+    "blockfi", "genesis", "silvergate",
+}
+
+# ── Disambiguation table — known name conflicts ────────────────────────────
+# When user searches these names, they almost certainly want the crypto asset,
+# not a small-cap stock that shares the ticker or company name.
+DISAMBIGUATION = {
+    "solana": {
+        "intended_type": "crypto",
+        "coin_id": "solana",
+        "skip_yfinance": True,
+        "note": "User wants SOL L1 blockchain, not Solana Company (HSDT)",
+    },
+    "ton": {
+        "intended_type": "crypto",
+        "coin_id": "the-open-network",
+        "skip_yfinance": True,
+        "note": "User wants TON blockchain, not Tokamak Network",
+    },
+    "ondo": {
+        "intended_type": "crypto",
+        "coin_id": "ondo",
+        "skip_yfinance": True,
+        "note": "User wants ONDO token, not any stock ticker",
+    },
+    "ripple": {
+        "intended_type": "crypto",
+        "coin_id": "ripple",
+        "skip_yfinance": True,
+        "note": "User wants XRP, not any stock",
+    },
+    "chainlink": {
+        "intended_type": "crypto",
+        "coin_id": "chainlink",
+        "skip_yfinance": True,
+        "note": "User wants LINK token",
+    },
+    "arbitrum": {
+        "intended_type": "crypto",
+        "coin_id": "arbitrum",
+        "skip_yfinance": True,
+        "note": "User wants ARB L2",
+    },
+    "jupiter": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Jupiter DEX on Solana",
+    },
+    "raydium": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Raydium DEX on Solana",
+    },
+    "canva": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "Canva design platform, private company",
+    },
+    "xai": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "xAI, Elon Musk's AI company",
+    },
+    "pendle": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Pendle Finance, yield trading protocol",
+    },
+    "eigenlayer": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "EigenLayer restaking protocol",
+    },
+    "lido": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Lido liquid staking",
+    },
+    "makerdao": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "MakerDAO / Sky Protocol",
+    },
+    "ethena": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Ethena Labs, USDe stablecoin",
+    },
+    "hyperliquid": {
+        "intended_type": "crypto",
+        "skip_yfinance": True,
+        "note": "Hyperliquid perpetual DEX",
+    },
+    "figma": {
+        "intended_type": "public_equity",
+        "ticker": "FIG",
+        "skip_yfinance": False,
+        "note": "Figma, design tool, IPO 2025",
+    },
+}
+
+
+def load_env():
+    load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+    # Also load from the current project directory (picks up FINNHUB_API_KEY etc.)
+    load_dotenv(override=False)
+
+    if not os.environ.get("FIRECRAWL_API_KEY"):
+        print("WARNING: Optional env var FIRECRAWL_API_KEY not set", file=sys.stderr)
+
+    llm_keys = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY")
+    if not any(os.environ.get(k) for k in llm_keys):
+        print(
+            "ERROR: No LLM API key found. Set at least one of: "
+            + ", ".join(llm_keys),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    for key in ("COINGECKO_API_KEY", "ROOTDATA_SKILL_KEY"):
+        if not os.environ.get(key):
+            print(f"WARNING: Optional env var {key} not set", file=sys.stderr)
+
+
+def refine_entity_type(company_name: str, company_type: str) -> str:
+    """把粗分類細化成具體 entity type"""
+    name_lower = company_name.lower().strip()
+
+    # Defunct lock — never reclassify a known dead company
+    if company_type == "defunct":
+        return "defunct"
+
+    # Disambiguation lock — don't override what was explicitly resolved
+    if name_lower in DISAMBIGUATION:
+        return DISAMBIGUATION[name_lower]["intended_type"]
+
+    vc_keywords = ["capital", "ventures", "partners", "fund", "labs invest",
+                   "a16z", "andreessen", "dragonfly", "pantera", "paradigm",
+                   "polychain", "multicoin", "hack vc", "fulgur"]
+    if any(kw in name_lower for kw in vc_keywords):
+        return "venture_capital"
+
+    exchange_keywords = ["binance", "coinbase", "kraken", "okx", "bybit",
+                         "bitmart", "mexc", "gate.io", "kucoin", "bitget",
+                         "exchange"]
+    if any(kw in name_lower for kw in exchange_keywords):
+        return "exchange"
+
+    foundation_keywords = ["foundation", "protocol foundation"]
+    if any(kw in name_lower for kw in foundation_keywords):
+        return "foundation"
+
+    return company_type
+
+
+async def _coingecko_search_mcap(company_name: str, client: httpx.AsyncClient) -> tuple[str | None, int]:
+    """Search CoinGecko for company_name. Returns (coin_id, market_cap_usd) or (None, 0)."""
+    coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
+    try:
+        resp = await client.get(
+            "https://api.coingecko.com/api/v3/search",
+            params={"query": company_name},
+            headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        name_lower = company_name.lower()
+        for coin in data.get("coins", []):
+            coin_name = coin.get("name", "").lower()
+            coin_symbol = coin.get("symbol", "").lower()
+            if not (coin_name == name_lower or coin_symbol == name_lower
+                    or name_lower == coin_name.split()[0]):
+                continue
+            coin_id = coin.get("id", "")
+            mcap_rank = coin.get("market_cap_rank")
+            if mcap_rank is not None and mcap_rank > 0:
+                # Fetch actual mcap from detail endpoint
+                try:
+                    detail_resp = await client.get(
+                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                        params={"localization": "false", "tickers": "false",
+                                "community_data": "false", "developer_data": "false"},
+                        headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+                    )
+                    detail_resp.raise_for_status()
+                    detail = detail_resp.json()
+                    mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
+                    if mcap and mcap > 1_000_000:
+                        return coin_id, int(mcap)
+                except Exception:
+                    pass
+                return coin_id, 0
+    except Exception as e:
+        print(f"[detect] CoinGecko search failed: {e}", file=sys.stderr)
+    return None, 0
+
+
+async def detect_company_type(company_name: str) -> tuple[str, str | None, str | None]:
+    """Detect whether the company is crypto, public_equity, or private.
+
+    Returns (company_type, resolved_ticker, company_full_name).
+    company_full_name is the human-readable name from yfinance (e.g. "Coherent Corp.").
+    """
+
+    # 0a. Defunct check — skip all API calls for known collapsed companies
+    name_lower = company_name.lower().strip()
+    if name_lower in DEFUNCT_COMPANIES:
+        print(f"[detect] DEFUNCT: '{company_name}' is in known defunct companies list")
+        return "defunct", None, None
+
+    # 0. Disambiguation table — known name conflicts, checked before any API call
+    if name_lower in DISAMBIGUATION:
+        d = DISAMBIGUATION[name_lower]
+        print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} ({d['note']})")
+        return d["intended_type"], None, None
+
+    # 1. Try yfinance first — direct ticker match
+    yf_mcap = 0
+    yf_ticker = None
+    yf_fullname = None
+    try:
+        def _direct_check():
+            info = yf.Ticker(company_name).info
+            mcap = (info.get("marketCap") or 0) if info else 0
+            name = (info.get("shortName") or info.get("longName")) if info else None
+            return mcap, name
+        yf_mcap, yf_fullname = await asyncio.wait_for(
+            asyncio.to_thread(_direct_check), timeout=10
+        )
+        if yf_mcap > 0:
+            yf_ticker = company_name
+        else:
+            yf_fullname = None
+    except (asyncio.TimeoutError, Exception) as e:
+        print(f"yfinance detection failed: {e}", file=sys.stderr)
+
+    # 1b. Try resolving company name → ticker via Yahoo Finance search
+    if not yf_ticker:
+        try:
+            resolved = await asyncio.wait_for(_resolve_ticker(company_name), timeout=10)
+            if resolved:
+                def _resolved_check():
+                    info = yf.Ticker(resolved).info
+                    mcap = (info.get("marketCap") or 0) if info else 0
+                    name = (info.get("shortName") or info.get("longName")) if info else None
+                    return mcap, name
+                _mcap, _name = await asyncio.wait_for(
+                    asyncio.to_thread(_resolved_check), timeout=10
+                )
+                if _mcap > 0:
+                    # Layer 3 sanity check: reject if resolved company name has zero
+                    # word overlap with the query (e.g. "Canva" → "Covanta Holding").
+                    # Skip this check when the query is already in ticker format.
+                    if not (company_name.isupper() and len(company_name) <= 5) and _name:
+                        q_words = set(company_name.lower().split())
+                        n_words = set(_name.lower().replace(".", " ").split())
+                        if not q_words.intersection(n_words):
+                            print(f"[detect] NAME_MISMATCH: '{company_name}' -> '{_name}' "
+                                  f"(ticker={resolved}) — no overlap, continuing to crypto checks")
+                            _mcap = 0  # reject; fall through to CoinGecko / DeFiLlama
+                    if _mcap > 0:
+                        yf_mcap = _mcap
+                        yf_ticker = resolved
+                        yf_fullname = _name
+        except (asyncio.TimeoutError, Exception) as e:
+            import traceback
+            print(f"yfinance name resolution failed: {e}", file=sys.stderr)
+            traceback.print_exc()
+
+    # 1c. If yfinance found a match, compare with CoinGecko market cap to resolve conflicts
+    if yf_ticker:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                cg_coin_id, cg_mcap = await _coingecko_search_mcap(company_name, client)
+                if cg_mcap > 0 and yf_mcap > 0 and cg_mcap > yf_mcap * 10:
+                    print(f"[detect] MCAP_OVERRIDE: CoinGecko ${cg_mcap:,.0f} >> yfinance ${yf_mcap:,.0f}, using crypto")
+                    return "crypto", None, None
+        except Exception as e:
+            print(f"[detect] CoinGecko mcap comparison failed: {e}", file=sys.stderr)
+        print(f"Detected type: public_equity (yfinance ticker={yf_ticker} fullname={yf_fullname} marketCap={yf_mcap})")
+        return "public_equity", yf_ticker, yf_fullname
+
+    # 2. Try CoinGecko with strict name matching
+    coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.coingecko.com/api/v3/search",
+                params={"query": company_name},
+                headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            name_lower = company_name.lower()
+            for coin in data.get("coins", []):
+                coin_name = coin.get("name", "").lower()
+                coin_symbol = coin.get("symbol", "").lower()
+                if not (coin_name == name_lower or coin_symbol == name_lower
+                        or name_lower == coin_name.split()[0]):
+                    continue
+                mcap_rank = coin.get("market_cap_rank")
+                if mcap_rank is not None and mcap_rank > 0:
+                    print(f"Detected type: crypto (matched coin '{coin.get('name')}' rank={mcap_rank})")
+                    return "crypto", None, None
+                coin_id = coin.get("id", "")
+                try:
+                    detail_resp = await client.get(
+                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                        params={"localization": "false", "tickers": "false",
+                                "community_data": "false", "developer_data": "false"},
+                        headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+                    )
+                    detail_resp.raise_for_status()
+                    detail = detail_resp.json()
+                    mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
+                    if mcap and mcap > 1_000_000:
+                        print(f"Detected type: crypto (matched coin '{coin.get('name')}' mcap=${mcap:,.0f})")
+                        return "crypto", None, None
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"CoinGecko detection failed: {e}", file=sys.stderr)
+
+    # 3. Try DeFiLlama — catches DeFi protocols not on CoinGecko
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            slug = await _resolve_defillama_slug(company_name, client)
+            if slug:
+                tvl_resp = await client.get(
+                    f"https://api.llama.fi/tvl/{slug}", timeout=10
+                )
+                if tvl_resp.status_code == 200:
+                    tvl = float(tvl_resp.text.strip())
+                    found = tvl > 0
+                    print(f"[detect] DeFiLlama check for '{company_name}': found={found} (slug={slug}, tvl={tvl:,.0f})")
+                    if found:
+                        print(f"Detected type: crypto (DeFiLlama slug='{slug}', tvl={tvl:,.0f})")
+                        return "crypto", None, None
+                else:
+                    print(f"[detect] DeFiLlama check for '{company_name}': found=False (HTTP {tvl_resp.status_code})")
+            else:
+                print(f"[detect] DeFiLlama check for '{company_name}': found=False (no slug resolved)")
+    except Exception as e:
+        print(f"DeFiLlama detection failed: {e}", file=sys.stderr)
+
+    # 4. Default — not public, not crypto: treat as private/unlisted startup
+    print("Detected type: private_or_unlisted")
+    return "private_or_unlisted", None, None
+
+
+async def run_fetcher(name: str, coro, timeout_seconds: int = 30):
+    """Run a single fetcher with a timeout and error handling."""
+    _t = time.time()
+    try:
+        result = await asyncio.wait_for(coro, timeout=timeout_seconds)
+        return name, {"status": "ok", "data": result, "_timing_s": round(time.time() - _t, 2)}
+    except asyncio.TimeoutError:
+        print(f"[strategy] {name} timed out after {timeout_seconds}s", file=sys.stderr)
+        return name, {"status": "timeout", "data": None, "_timing_s": round(time.time() - _t, 2)}
+    except Exception as e:
+        print(f"Fetcher {name} failed: {e}", file=sys.stderr)
+        return name, {"status": "error", "error": str(e), "data": None, "_timing_s": round(time.time() - _t, 2)}
+
+
+async def _round2_search(
+    company_name: str,
+    company_full_name: str | None,
+    fetcher_results: dict,
+) -> list[dict]:
+    """Layer 3: Use Haiku to find info gaps from round 1, generate follow-up queries."""
+    try:
+        display_name = company_full_name or company_name
+
+        # Build a compact summary of round 1 findings
+        summary_parts: list[str] = []
+        news = fetcher_results.get("news", {})
+        if news.get("status") == "ok":
+            for a in (news.get("data") or {}).get("articles", [])[:5]:
+                summary_parts.append(f"- {a.get('title', '')}: {a.get('content', '')[:200]}")
+        website = fetcher_results.get("website", {})
+        if website.get("status") == "ok" and website.get("data"):
+            summary_parts.append(str(website["data"])[:400])
+        yf = fetcher_results.get("yfinance", {})
+        if yf.get("status") == "ok" and yf.get("data"):
+            summary_parts.append(str(yf["data"])[:300])
+
+        if not summary_parts:
+            print("[round2] no round 1 data to analyze, skipping")
+            return []
+
+        summary_text = "\n".join(summary_parts[:10])
+        prompt = (
+            f"Based on the following research results about {display_name}, "
+            f"what key information is still missing? "
+            f"Generate 2-3 follow-up search queries to fill the gaps.\n\n"
+            f"Research so far:\n{summary_text}\n\n"
+            f"Respond with ONLY a JSON array of query strings. "
+            f'Example: ["query 1", "query 2"]'
+        )
+
+        from deeplook.judgment.synthesize import get_llm_response
+        raw_text, _, _ = get_llm_response(prompt)
+        raw = raw_text.strip()
+        import re as _re
+        match = _re.search(r"\[.*?\]", raw, _re.DOTALL)
+        if not match:
+            print(f"[round2] could not parse query array from: {raw[:100]}")
+            return []
+        follow_up_queries: list[str] = json.loads(match.group())
+        follow_up_queries = [q for q in follow_up_queries if isinstance(q, str)][:3]
+        print(f"[round2] follow-up queries: {follow_up_queries}")
+
+        round2_news = await asyncio.wait_for(
+            fetch_news(company_name, queries=follow_up_queries),
+            timeout=10,
+        )
+        articles = round2_news.get("articles", [])
+        print(f"[round2] found {len(articles)} additional articles")
+        return articles
+    except Exception as e:
+        print(f"[round2] failed: {e}")
+        return []
+
+
+# ── Mega-cap override: hand-curated peers for large/mega caps ─────────────
+MEGA_CAP_PEERS: dict[str, list[str]] = {
+    "AAPL":  ["MSFT", "GOOGL", "AMZN"],
+    "MSFT":  ["AAPL", "GOOGL", "AMZN"],
+    "GOOGL": ["MSFT", "META", "AMZN"],
+    "GOOG":  ["MSFT", "META", "AMZN"],
+    "AMZN":  ["MSFT", "GOOGL", "WMT"],
+    "META":  ["GOOGL", "SNAP", "PINS"],
+    "NVDA":  ["AMD", "INTC", "AVGO"],
+    "TSLA":  ["RIVN", "F", "GM"],
+    "AVGO":  ["NVDA", "AMD", "QCOM"],
+    "JPM":   ["BAC", "WFC", "GS"],
+    "V":     ["MA", "AXP", "PYPL"],
+    "MA":    ["V", "AXP", "PYPL"],
+    "UNH":   ["CVS", "CI", "HUM"],
+    "XOM":   ["CVX", "COP", "BP"],
+}
+
+# ── Peer ticker mapping by yfinance industry ──────────────────────────────
+INDUSTRY_PEER_TICKERS: dict[str, list[str]] = {
+    "Semiconductors": ["AMD", "INTC", "QCOM"],
+    "Semiconductor Equipment & Materials": ["KLAC", "AMAT", "LRCX"],
+    "Electronic Components": ["LITE", "MACOM", "CIEN"],
+    "Scientific & Technical Instruments": ["LITE", "MTSI", "CIEN"],
+    "Communication Equipment": ["CSCO", "NOK", "ERIC"],
+    "Software—Infrastructure": ["MSFT", "ORCL", "IBM"],
+    "Software—Application": ["CRM", "SAP", "NOW"],
+    "Internet Retail": ["AMZN", "BABA", "SHOP"],
+    "Internet Content & Information": ["META", "GOOGL", "SNAP"],
+    "Consumer Electronics": ["AAPL", "SONO", "GPRO"],
+    "Drug Manufacturers—General": ["JNJ", "PFE", "ABBV"],
+    "Biotechnology": ["AMGN", "GILD", "REGN"],
+    "Banks—Diversified": ["JPM", "BAC", "WFC"],
+    "Asset Management": ["BLK", "SCHW", "MS"],
+    "Aerospace & Defense": ["LMT", "RTX", "NOC"],
+    "Oil & Gas Integrated": ["XOM", "CVX", "BP"],
+    "Auto Manufacturers": ["TSLA", "GM", "F"],
+    "Entertainment": ["DIS", "NFLX", "WBD"],
+    "Telecom Services": ["T", "VZ", "TMUS"],
+}
+
+
+def _get_peer_tickers(fetcher_results: dict, main_ticker: str | None) -> list[str]:
+    """Return up to 3 competitor tickers. Checks MEGA_CAP_PEERS first, then
+    INDUSTRY_PEER_TICKERS with market cap filter (0.1x–10x of target)."""
+    try:
+        yf_result = fetcher_results.get("yfinance") or {}
+        if yf_result.get("status") != "ok":
+            return []
+        data = yf_result.get("data") or {}
+        main = (main_ticker or "").upper()
+
+        # 1. Mega-cap override — use if ticker is in the table
+        if main and main in MEGA_CAP_PEERS:
+            return MEGA_CAP_PEERS[main][:3]
+
+        # 2. Industry fallback with market cap filter
+        industry = data.get("industry", "")
+        sector = data.get("sector", "")
+        candidates = INDUSTRY_PEER_TICKERS.get(industry) or INDUSTRY_PEER_TICKERS.get(sector) or []
+        candidates = [t for t in candidates if t.upper() != main]
+
+        target_mcap = data.get("market_cap") or 0
+        if target_mcap <= 0:
+            return candidates[:3]  # no mcap data, return as-is
+
+        filtered = []
+        for t in candidates:
+            try:
+                import yfinance as _yf
+                info = _yf.Ticker(t).fast_info
+                peer_mcap = getattr(info, "market_cap", None) or 0
+                if peer_mcap > 0 and (0.1 * target_mcap) <= peer_mcap <= (10 * target_mcap):
+                    filtered.append(t)
+            except Exception:
+                filtered.append(t)  # include on error rather than drop
+            if len(filtered) >= 3:
+                break
+        return filtered
+    except Exception:
+        return []
+
+
+def _build_technical_snapshot(yf_data: dict) -> dict | None:
+    """Build technical snapshot dict from yfinance data."""
+    try:
+        if not yf_data or not yf_data.get("success"):
+            return None
+        price = yf_data.get("price")
+        high52 = yf_data.get("fiftyTwoWeekHigh")
+        low52 = yf_data.get("fiftyTwoWeekLow")
+        ma50 = yf_data.get("fiftyDayAverage")
+        ma200 = yf_data.get("twoHundredDayAverage")
+        rsi = yf_data.get("rsi14")
+        snap = {
+            "price": price,
+            "52w_high": round(high52, 2) if high52 else None,
+            "52w_low": round(low52, 2) if low52 else None,
+            "pct_from_high": round((price - high52) / high52 * 100, 1) if price and high52 else None,
+            "50d_ma": round(ma50, 2) if ma50 else None,
+            "200d_ma": round(ma200, 2) if ma200 else None,
+            "rsi14": rsi,
+        }
+        return snap if any(v is not None for k, v in snap.items() if k != "price") else None
+    except Exception:
+        return None
+
+
+async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False) -> dict:
+    t0 = time.time()
+    _timing: dict = {}
+
+    _t = time.time()
+    company_type, resolved_ticker, company_full_name = await detect_company_type(company_name)
+    entity_type = refine_entity_type(company_name, company_type)
+    _timing["entity_routing"] = round(time.time() - _t, 2)
+    print(f"[pipeline] {company_name} -> type={company_type}, ticker={resolved_ticker}, full_name={company_full_name}")
+    print(f"[pipeline] entity_type refined: {company_type} -> {entity_type}")
+
+    # ── Search Intelligence Layer ──────────────────────────────────────────
+    queries = build_search_queries(company_name, entity_type, resolved_ticker, company_full_name)
+    active = get_active_fetchers(entity_type)
+    limits = get_fetcher_limits()
+    time_limits = get_time_limits()
+
+    # Build fetcher tasks (only active ones, with per-fetcher timeouts + queries)
+    _include_news = active.get("news", False)
+    _include_youtube = active.get("youtube", False) and include_youtube
+
+    # ── Round 1: deterministic fetchers (ticker/name → structured data) ────
+    r1_tasks = []
+
+    for fetcher_name, is_active in active.items():
+        if not is_active:
+            print(f"[strategy] SKIP {fetcher_name} (not relevant for {company_type})")
+            continue
+        if fetcher_name in ("news", "youtube"):
+            continue  # handled in Round 2
+
+        timeout = limits.get(fetcher_name, {}).get("timeout_seconds", 10)
+
+        if fetcher_name == "website":
+            r1_tasks.append(run_fetcher("website", fetch_website(company_name), timeout))
+
+        elif fetcher_name == "wikipedia":
+            r1_tasks.append(run_fetcher("wikipedia", fetch_wikipedia(company_name), timeout))
+
+        elif fetcher_name == "yfinance":
+            yf_input = resolved_ticker if resolved_ticker else company_name
+            r1_tasks.append(run_fetcher("yfinance", fetch_yfinance(yf_input), timeout))
+            # Bonus: Yahoo Finance news feed — free, no extra API key
+            r1_tasks.append(run_fetcher("yfinance_news", fetch_yfinance_news(yf_input), timeout))
+
+        elif fetcher_name == "coingecko":
+            r1_tasks.append(run_fetcher("coingecko", fetch_coingecko(company_name), timeout))
+
+        elif fetcher_name == "rootdata":
+            r1_tasks.append(run_fetcher("rootdata", fetch_rootdata(company_name), timeout))
+
+        elif fetcher_name == "defillama":
+            r1_tasks.append(run_fetcher("defillama", fetch_defillama(company_name), timeout))
+
+        elif fetcher_name == "sec_edgar":
+            ticker_input = resolved_ticker if resolved_ticker else company_name
+            r1_tasks.append(run_fetcher("sec_edgar", fetch_sec_edgar(ticker_input), timeout))
+
+        elif fetcher_name == "finnhub":
+            ticker_input = resolved_ticker if resolved_ticker else company_name
+            r1_tasks.append(run_fetcher("finnhub", asyncio.to_thread(fetch_finnhub, ticker_input), timeout))
+
+    _t = time.time()
+    r1_results_list = await asyncio.gather(*r1_tasks)
+    _timing["fetchers_r1_wall"] = round(time.time() - _t, 2)
+    for _n, _r in r1_results_list:
+        _timing[f"fetcher_{_n}"] = _r.pop("_timing_s", None)
+    r1_data = {name: result for name, result in r1_results_list}
+
+    # ── Round 1.5: Haiku generates context-aware search queries ────────────
+    from deeplook.judgment.synthesize import generate_search_queries
+    _t = time.time()
+    search_queries_haiku = await asyncio.to_thread(
+        generate_search_queries, company_name, entity_type, r1_data
+    )
+    _timing["llm_search_queries"] = round(time.time() - _t, 2)
+    print(f"[search_queries] youtube={search_queries_haiku.get('youtube_queries')}, "
+          f"news={search_queries_haiku.get('news_queries')}")
+
+    # ── Round 2: search-based fetchers (using Haiku queries) ───────────────
+    r2_tasks = []
+
+    if _include_news:
+        news_queries_r2 = search_queries_haiku.get("news_queries") or [f"{company_name} latest news"]
+        max_age = time_limits.get("news")
+        timeout_news = limits.get("news", {}).get("timeout_seconds", 10)
+        r2_tasks.append(run_fetcher(
+            "news",
+            fetch_news(company_name, queries=news_queries_r2, max_age_days=max_age),
+            timeout_news,
+        ))
+
+    if _include_youtube:
+        yt_queries = search_queries_haiku.get("youtube_queries") or [company_name]
+        yt_query = yt_queries[0] if yt_queries else company_name
+        max_age_yt = time_limits.get("youtube")
+        transcript_timeout = limits.get("youtube", {}).get("transcript_timeout", 10)
+        max_results_yt = limits.get("youtube", {}).get("max_items", 3)
+        timeout_yt = limits.get("youtube", {}).get("timeout_seconds", 10)
+        r2_tasks.append(run_fetcher(
+            "youtube",
+            fetch_youtube(
+                company_name,
+                query=yt_query,
+                max_results=max_results_yt,
+                max_age_days=max_age_yt,
+                transcript_timeout=transcript_timeout,
+            ),
+            timeout_yt,
+        ))
+    elif active.get("youtube", False):
+        print(f"[strategy] SKIP youtube (--no-youtube flag)")
+
+    _t = time.time()
+    r2_results_list = await asyncio.gather(*r2_tasks)
+    _timing["fetchers_r2_wall"] = round(time.time() - _t, 2)
+    for _n, _r in r2_results_list:
+        _timing[f"fetcher_{_n}"] = _r.pop("_timing_s", None)
+
+    # ── Merge Round 1 + Round 2 results ────────────────────────────────────
+    results_list = r1_results_list + r2_results_list
+
+    fetcher_results = {}
+    succeeded = []
+    failed = []
+
+    for name, result in results_list:
+        # Layer 4: Validate result relevance
+        if result["status"] == "ok":
+            if not validate_result(name, company_name, result):
+                result["status"] = "rejected"
+                failed.append(name)
+            else:
+                succeeded.append(name)
+        else:
+            failed.append(name)
+        fetcher_results[name] = result
+
+    # ── Merge yfinance_news into news pool (public_equity only) ───────────
+    yf_news = fetcher_results.pop("yfinance_news", None)
+    if (yf_news and yf_news.get("status") == "ok"
+            and "news" in fetcher_results
+            and fetcher_results["news"]["status"] == "ok"):
+        extra = yf_news["data"].get("articles", [])
+        existing_urls = {a["url"] for a in fetcher_results["news"]["data"].get("articles", [])}
+        merged = [a for a in extra if a["url"] not in existing_urls]
+        fetcher_results["news"]["data"]["articles"].extend(merged)
+        print(f"[strategy] yfinance_news merged: +{len(merged)} articles")
+
+    # ── Post-process news: dedup + rank ────────────────────────────────────
+    if "news" in fetcher_results and fetcher_results["news"]["status"] == "ok":
+        articles = fetcher_results["news"]["data"].get("articles", [])
+        articles = deduplicate_news(articles)  # Layer 6
+        articles = rank_articles(articles, company_name)  # Layer 7
+        fetcher_results["news"]["data"]["articles"] = articles
+        print(f"[strategy] news final: {len(articles)} articles after dedup+rank")
+
+    # ── Round 2: LLM-guided follow-up search ──────────────────────────────
+    round2_articles = await _round2_search(company_name, company_full_name, fetcher_results)
+    if round2_articles and "news" in fetcher_results and fetcher_results["news"]["status"] == "ok":
+        existing_urls = {a["url"] for a in fetcher_results["news"]["data"].get("articles", [])}
+        new_articles = [a for a in round2_articles if a.get("url") not in existing_urls]
+        fetcher_results["news"]["data"]["articles"].extend(new_articles)
+        # Re-dedup + re-rank with round 2 additions
+        all_articles = fetcher_results["news"]["data"]["articles"]
+        all_articles = deduplicate_news(all_articles)
+        all_articles = rank_articles(all_articles, company_name)
+        fetcher_results["news"]["data"]["articles"] = all_articles
+        print(f"[round2] merged +{len(new_articles)} articles, total={len(all_articles)}")
+
+    elapsed = time.time() - t0
+    api_calls = len(r1_tasks) + len(r2_tasks) + 1  # +1 for detect_company_type
+
+    print(f"\nFetchers succeeded: {succeeded}")
+    print(f"Fetchers failed: {failed}")
+    print(f"API calls: {api_calls}")
+    print(f"Total time: {elapsed:.1f}s\n")
+
+    print('RAW DATA PREVIEW:', {k: str(v)[:200] for k, v in fetcher_results.items()})
+
+    # ── P1: Peer Comparison + Technical Snapshot (public_equity only) ────────
+    peer_comparison: list[dict] = []
+    technical_snapshot: dict | None = None
+
+    if entity_type == "public_equity":
+        yf_result = fetcher_results.get("yfinance") or {}
+        yf_data = yf_result.get("data") or {}
+
+        # P1-3: Technical Snapshot
+        technical_snapshot = _build_technical_snapshot(yf_data)
+        if technical_snapshot:
+            print(f"[tech] 52w={technical_snapshot.get('52w_low')}-{technical_snapshot.get('52w_high')} "
+                  f"RSI={technical_snapshot.get('rsi14')} vs_high={technical_snapshot.get('pct_from_high')}%")
+
+        # P1-1: Peer Comparison — fetch all 3 in parallel
+        peer_tickers = _get_peer_tickers(fetcher_results, resolved_ticker)
+        if peer_tickers:
+            print(f"[peers] fetching {peer_tickers} in parallel")
+            try:
+                peer_comparison = await asyncio.wait_for(
+                    fetch_peer_data(peer_tickers),
+                    timeout=12.0,
+                )
+                print(f"[peers] got {len(peer_comparison)} records")
+            except Exception as e:
+                print(f"[peers] fetch failed: {e}")
+
+        # Inject into judgment context so LLM can reference them
+        if peer_comparison:
+            fetcher_results["peer_comparison"] = {"status": "ok", "data": peer_comparison}
+        if technical_snapshot:
+            fetcher_results["technical_snapshot"] = {"status": "ok", "data": technical_snapshot}
+        # P1-2: Earnings date as upcoming catalyst seed
+        earnings_date = yf_data.get("earnings_date")
+        if earnings_date:
+            fetcher_results["earnings_calendar"] = {
+                "status": "ok",
+                "data": {"next_earnings_date": earnings_date, "source": "yfinance_calendar"},
+            }
+
+    # Only pass non-rejected results to judgment
+    judgment_results = {
+        k: v for k, v in fetcher_results.items()
+        if v.get("status") not in ("rejected",)
+    }
+
+    # Synthesize final judgment (pass entity_type so LLM applies correct framework)
+    # P0-3: catch RuntimeError if all LLM providers fail — return error dict instead of crash
+    _t = time.time()
+    try:
+        judgment = synthesize(company_name, entity_type, judgment_results, elapsed, api_calls)
+    except RuntimeError as e:
+        print(f"[research] LLM synthesis failed (no API keys?): {e}", file=sys.stderr)
+        judgment = {
+            "error": f"LLM synthesis failed: {e}",
+            "metadata": {
+                "total_time_seconds": round(elapsed, 2),
+                "total_api_calls": api_calls,
+                "llm_model_used": "none",
+                "llm_tokens_used": 0,
+            },
+        }
+    _timing["synthesize_total"] = round(time.time() - _t, 2)
+    # Extract per-LLM-call timings stashed in metadata by synthesize()
+    _meta = (judgment.get("metadata") or {})
+    for _k in ("llm_extract", "llm_judge", "llm_act"):
+        _v = _meta.pop(f"_timing_{_k}", None)
+        if _v is not None:
+            _timing[_k] = _v
+
+    _timing["total_wall"] = round(time.time() - t0, 2)
+
+    # Add metadata
+    output = {
+        "company": company_name,
+        "company_type": company_type,
+        "entity_type": entity_type,
+        "sources_succeeded": succeeded,
+        "sources_failed": failed,
+        "api_calls": api_calls,
+        "elapsed_seconds": round(elapsed, 1),
+        "fetcher_results": fetcher_results,
+        "peer_comparison": peer_comparison,
+        "technical_snapshot": technical_snapshot,
+        "judgment": judgment,
+        "_timing": _timing,
+    }
+
+    # Print to stdout
+    output_json = json.dumps(output, indent=2, default=str)
+    print(output_json)
+
+    # Save to file
+    today = date.today().isoformat()
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{company_name}_{today}.json")
+    with open(output_path, "w") as f:
+        f.write(output_json)
+    print(f"\nSaved to {output_path}", file=sys.stderr)
+
+    # Print human-readable report — only when running interactively.
+    # When eval.py runs this as a subprocess it captures stdout to parse JSON;
+    # format_report output would appear after the JSON and cause "Extra data" errors.
+    if output_file or sys.stdout.isatty():
+        formatter = format_layer1 if layer1 else format_report
+        if output_file:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                formatter(output)
+            report_text = buf.getvalue()
+            sys.stdout.write(report_text)
+            with open(output_file, "w") as f:
+                f.write(report_text)
+            print(f"Report saved to {output_file}", file=sys.stderr)
+        else:
+            formatter(output)
+
+    return output
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("company", help="Company name")
+    parser.add_argument("--no-youtube", action="store_true", help="Skip YouTube fetcher")
+    parser.add_argument("--output", metavar="FILE", help="Save report as markdown file (e.g. nvidia.md)")
+    parser.add_argument("--layer1", action="store_true", help="Print compact Layer 1 summary only")
+    args = parser.parse_args()
+
+    load_env()
+    asyncio.run(run_research(args.company, include_youtube=not args.no_youtube, output_file=args.output, layer1=args.layer1))
+
+
+if __name__ == "__main__":
+    main()

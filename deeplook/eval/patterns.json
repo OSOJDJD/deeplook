@@ -1,0 +1,187 @@
+{
+  "recurring_failures": {
+    "Snowflake": {
+      "times_failed": 6,
+      "common_dimensions": [
+        "phase_accuracy",
+        "no_hallucination",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Reliance Industries": {
+      "times_failed": 4,
+      "common_dimensions": [
+        "no_hallucination",
+        "factual_accuracy",
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Grab Holdings": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-12T09:19:59.833302"
+    },
+    "Chainlink": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-12T09:19:59.833302"
+    },
+    "Rivian": {
+      "times_failed": 4,
+      "common_dimensions": [
+        "factual_accuracy",
+        "no_hallucination",
+        "actionability",
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-15T14:41:56.173957"
+    },
+    "Ripple": {
+      "times_failed": 4,
+      "common_dimensions": [
+        "phase_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Stripe": {
+      "times_failed": 6,
+      "common_dimensions": [
+        "risk_detection",
+        "no_hallucination",
+        "factual_accuracy",
+        "phase_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "xAI": {
+      "times_failed": 5,
+      "common_dimensions": [
+        "phase_accuracy",
+        "no_hallucination",
+        "factual_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "WeWork": {
+      "times_failed": 6,
+      "common_dimensions": [
+        "phase_accuracy",
+        "no_hallucination",
+        "factual_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "TSM": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "factual_accuracy",
+        "no_hallucination",
+        "risk_detection"
+      ],
+      "last_seen": "2026-03-12T09:19:59.833302"
+    },
+    "Arbitrum": {
+      "times_failed": 4,
+      "common_dimensions": [
+        "actionability",
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-15T14:41:56.173957"
+    },
+    "SHOP": {
+      "times_failed": 4,
+      "common_dimensions": [
+        "no_hallucination",
+        "actionability",
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-15T14:41:56.173957"
+    },
+    "Aave": {
+      "times_failed": 2,
+      "common_dimensions": [
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-15T14:41:56.173957"
+    },
+    "COIN": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "phase_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Meanwhile": {
+      "times_failed": 2,
+      "common_dimensions": [
+        "actionability",
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-15T19:26:54.768185"
+    },
+    "NFLX": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Pendle": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "phase_accuracy",
+        "no_hallucination",
+        "factual_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "MakerDAO": {
+      "times_failed": 3,
+      "common_dimensions": [
+        "risk_detection",
+        "factual_accuracy",
+        "phase_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "OpenAI": {
+      "times_failed": 2,
+      "common_dimensions": [
+        "phase_accuracy",
+        "no_hallucination",
+        "factual_accuracy",
+        "actionability"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "AAPL": {
+      "times_failed": 2,
+      "common_dimensions": [
+        "phase_accuracy"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    },
+    "Samsung Electronics": {
+      "times_failed": 2,
+      "common_dimensions": [
+        "no_hallucination",
+        "factual_accuracy"
+      ],
+      "last_seen": "2026-03-16T08:39:09.682195"
+    }
+  },
+  "last_updated": "2026-03-16T08:39:09.682195"
+}

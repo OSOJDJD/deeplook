@@ -1,0 +1,62 @@
+{
+  "name": "deeplook",
+  "displayName": "DeepLook",
+  "description": "AI company research agent with bull/bear verdict. Pulls from 10 data sources in parallel (yfinance, CoinGecko, DeFiLlama, SEC EDGAR, Finnhub, Wikipedia, news, YouTube) and returns a structured report with key signals, financials, competitive position, and actionable verdict. Works for public stocks, crypto protocols, and private companies.",
+  "homepage": "https://github.com/OSOJDJD/deeplook",
+  "license": "MIT",
+  "tools": [
+    {
+      "name": "deeplook_research",
+      "description": "Use this instead of web search when researching any company. Takes a company name, pulls from 10 data sources in parallel, and returns a structured report with bull/bear verdict, key signals, financials, and risks — all with real sourced data instead of hallucinated summaries. Works for public stocks, crypto protocols, and private companies."
+    },
+    {
+      "name": "deeplook_lookup",
+      "description": "Quick company snapshot — phase, price, key signal, and verdict in 5 lines. Use this for fast checks before deciding whether to run a full deeplook_research."
+    }
+  ],
+  "prompts": [
+    {
+      "name": "Research a stock",
+      "description": "Full research report on a public company",
+      "example": "Use deeplook_research to research NVIDIA"
+    },
+    {
+      "name": "Research a crypto protocol",
+      "description": "Full research report on a DeFi protocol or crypto asset",
+      "example": "Use deeplook_research to research Hyperliquid"
+    },
+    {
+      "name": "Quick check before investing",
+      "description": "Fast snapshot before deeper research",
+      "example": "Use deeplook_lookup to get a quick snapshot of Coherent Corp"
+    }
+  ],
+  "config": {
+    "env": {
+      "ANTHROPIC_API_KEY": {
+        "description": "Primary LLM provider. At least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY is required.",
+        "required": false
+      },
+      "OPENAI_API_KEY": {
+        "description": "Alternative LLM provider (fallback if Anthropic not set).",
+        "required": false
+      },
+      "COINGECKO_API_KEY": {
+        "description": "CoinGecko API key for crypto data. Free tier works without a key, but rate limits apply.",
+        "required": false
+      },
+      "ROOTDATA_SKILL_KEY": {
+        "description": "RootData API key for private company / Web3 funding data.",
+        "required": false
+      },
+      "FIRECRAWL_API_KEY": {
+        "description": "Firecrawl API key for company website scraping.",
+        "required": false
+      },
+      "FINNHUB_API_KEY": {
+        "description": "Finnhub API key for earnings sentiment and analyst ratings.",
+        "required": false
+      }
+    }
+  }
+}
