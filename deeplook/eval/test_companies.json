@@ -1,0 +1,752 @@
+[
+  {
+    "company": "Blockstream",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "Bitcoin",
+      "sidechain",
+      "Liquid"
+    ],
+    "expected_action_direction": "establish contact",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Metaplanet",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Bitcoin",
+      "treasury",
+      "Japan"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Meanwhile",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "insurance",
+      "Bitcoin",
+      "funding"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Stripe",
+    "category": "us_growth",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "payments",
+      "fintech"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "NVDA",
+    "category": "us_mega_cap",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "GPU",
+      "AI",
+      "chips"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "FTX",
+    "category": "edge_case",
+    "expected_phase": "DISTRESS",
+    "expected_momentum": "CRISIS",
+    "must_mention": [
+      "bankruptcy",
+      "fraud",
+      "SBF"
+    ],
+    "expected_action_direction": "do not reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Terra Luna",
+    "category": "edge_case",
+    "expected_phase": "DISTRESS",
+    "expected_momentum": "CRISIS",
+    "must_mention": [
+      "collapse",
+      "stablecoin",
+      "UST"
+    ],
+    "expected_action_direction": "do not reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Morpho Labs",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "DeFi",
+      "lending"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "AAPL",
+    "category": "us_mega_cap",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "iPhone",
+      "hardware",
+      "services"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "TSLA",
+    "category": "us_mega_cap",
+    "expected_phase": "STABLE",
+    "expected_momentum": "DECELERATING",
+    "must_mention": [
+      "EV",
+      "Tesla",
+      "autonomous"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "SHOP",
+    "category": "us_growth",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "ecommerce",
+      "merchants"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Ripple",
+    "category": "crypto",
+    "expected_phase": "PIVOTING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "XRP",
+      "payments",
+      "SEC"
+    ],
+    "expected_action_direction": "wait for clarity",
+    "eval_group": "active"
+  },
+  {
+    "company": "PLTR",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "data",
+      "government",
+      "AI"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "WeWork",
+    "category": "edge_case",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "coworking",
+      "WeWork"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "AMZN",
+    "category": "us_mega_cap",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "AWS",
+      "cloud",
+      "ecommerce"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "GOOGL",
+    "category": "us_mega_cap",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "search",
+      "AI",
+      "advertising"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "MSFT",
+    "category": "us_mega_cap",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Azure",
+      "AI",
+      "cloud"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Datadog",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "observability",
+      "monitoring",
+      "cloud"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "CrowdStrike",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "cybersecurity",
+      "endpoint",
+      "AI"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Snowflake",
+    "category": "us_growth",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "data",
+      "cloud",
+      "warehouse"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Solana",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "SOL",
+      "blockchain",
+      "DeFi"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Uniswap",
+    "category": "crypto",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "DEX",
+      "DeFi",
+      "UNI"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Aave",
+    "category": "crypto",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "DeFi",
+      "lending",
+      "protocol"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Arbitrum",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Layer 2",
+      "Ethereum",
+      "ARB"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Chainlink",
+    "category": "crypto",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "oracle",
+      "LINK",
+      "blockchain"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "SpaceX",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "rocket",
+      "Starlink",
+      "Starship"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Databricks",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "data",
+      "AI",
+      "lakehouse"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Anthropic",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "AI",
+      "Claude",
+      "safety"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Anduril",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "defense",
+      "autonomous",
+      "AI"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "TSM",
+    "category": "international",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "semiconductor",
+      "chips",
+      "foundry"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Samsung Electronics",
+    "category": "international",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "semiconductor",
+      "smartphone",
+      "memory"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "MELI",
+    "category": "international",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "ecommerce",
+      "fintech",
+      "Latin America"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Grab Holdings",
+    "category": "international",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "Southeast Asia",
+      "ride-hailing",
+      "superapp"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "Reliance Industries",
+    "category": "international",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "India",
+      "Jio",
+      "conglomerate"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "xAI",
+    "category": "edge_case",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Grok",
+      "AI",
+      "Elon Musk"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Worldcoin",
+    "category": "edge_case",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "iris",
+      "World ID",
+      "crypto"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Rivian",
+    "category": "edge_case",
+    "expected_phase": "STABLE",
+    "expected_momentum": "DECELERATING",
+    "must_mention": [
+      "EV",
+      "electric truck",
+      "Amazon"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "META",
+    "category": "us_mega_cap",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "AI",
+      "advertising",
+      "Reality Labs"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "AVGO",
+    "category": "us_mega_cap",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "custom ASIC",
+      "networking",
+      "AI infrastructure"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "NFLX",
+    "category": "us_mega_cap",
+    "expected_phase": "STABLE",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "streaming",
+      "advertising",
+      "live sports"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "JPM",
+    "category": "us_mega_cap",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "banking",
+      "AI",
+      "Jamie Dimon"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "COIN",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "crypto exchange",
+      "Base",
+      "regulation"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "HOOD",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "retail trading",
+      "crypto",
+      "Bitstamp"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "COHR",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "optical transceivers",
+      "datacom",
+      "AI infrastructure"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "ARM",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "chip architecture",
+      "licensing",
+      "AI"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "SMCI",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "AI servers",
+      "rack systems",
+      "Nvidia"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "MU",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "HBM",
+      "AI memory",
+      "DRAM"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Lido",
+    "category": "crypto",
+    "expected_phase": "STABLE",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "liquid staking",
+      "stETH",
+      "Ethereum"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "MakerDAO",
+    "category": "crypto",
+    "expected_phase": "PIVOTING",
+    "expected_momentum": "STEADY",
+    "must_mention": [
+      "DAI",
+      "stablecoin",
+      "Sky Protocol"
+    ],
+    "expected_action_direction": "monitor",
+    "eval_group": "active"
+  },
+  {
+    "company": "EigenLayer",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "restaking",
+      "Ethereum",
+      "AVS"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Jupiter",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Solana",
+      "DEX aggregator",
+      "JUP"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Raydium",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "Solana",
+      "AMM",
+      "RAY"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Ethena",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "USDe",
+      "synthetic dollar",
+      "yield"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Pendle",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "yield trading",
+      "PT",
+      "YT"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Hyperliquid",
+    "category": "crypto",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "perpetual futures",
+      "HYPE",
+      "on-chain orderbook"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "OpenAI",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "ChatGPT",
+      "GPT",
+      "AGI"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "fixed"
+  },
+  {
+    "company": "Figma",
+    "category": "us_growth",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "design platform",
+      "FIG",
+      "Adobe acquisition"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  },
+  {
+    "company": "Canva",
+    "category": "pre_ipo",
+    "expected_phase": "EXPANDING",
+    "expected_momentum": "ACCELERATING",
+    "must_mention": [
+      "design platform",
+      "AI",
+      "IPO 2026"
+    ],
+    "expected_action_direction": "reach out",
+    "eval_group": "active"
+  }
+]

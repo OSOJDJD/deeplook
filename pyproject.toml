@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deeplook"
+version = "0.1.0"
+description = "Bloomberg terminal for AI agents — deep company research via MCP"
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+
+dependencies = [
+    "anthropic",
+    "openai",
+    "google-genai",
+    "httpx",
+    "beautifulsoup4",
+    "duckduckgo-search>=6.0,<7.0",
+    "yfinance",
+    "mcp>=1.9.0",
+    "yt-dlp",
+    "python-dotenv",
+    "wikipedia-api",
+]
+
+[project.scripts]
+deeplook-mcp = "deeplook.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["deeplook*"]
