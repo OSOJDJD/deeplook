@@ -412,7 +412,7 @@ def format_report(data: dict, bold_mode: str = "ansi") -> None:
     investors = funding.get("key_investors", [])
 
     regime_a = valuation.get("REGIME_A_public_equity_only", {})
-    regime_b = valuation.get("REGIME_B_crypto_only", {})
+    regime_b = valuation.get("REGIME_B_crypto_only") or valuation.get("REGIME_B_crypto") or {}
 
     if regime_a:
         for key, label in [
@@ -682,7 +682,7 @@ def build_structured_json(data):
         try: return float(str(v).replace(",","").strip())
         except (TypeError, ValueError): return v
     ra = val.get("REGIME_A_public_equity_only") or {}
-    rb = val.get("REGIME_B_crypto_only") or {}
+    rb = val.get("REGIME_B_crypto_only") or val.get("REGIME_B_crypto") or {}
     if ra: o["valuation"] = {"pe_ratio":_val_clean(ra.get("pe_ratio")),"price_to_sales":_val_clean(ra.get("price_to_sales")),"analyst_target":_val_clean(ra.get("analyst_target_price"))}
     elif rb: o["valuation"] = {"fdv":rb.get("fully_diluted_valuation"),"mcap_to_tvl":_val_clean(rb.get("market_cap_to_tvl")),"protocol_revenue_annual":rb.get("protocol_revenue_annual"),"upcoming_unlocks":rb.get("upcoming_unlocks")}
     pl = []

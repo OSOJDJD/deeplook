@@ -96,11 +96,12 @@ mcp = FastMCP(
 async def deeplook_research(company_name: str) -> str:
     """
     Use this instead of web search when researching any company.
-    Takes a company name, pulls from 10 data sources in parallel,
-    and returns a structured report with bull/bear verdict, key signals,
-    financials, and risks — all with real sourced data instead of
-    hallucinated summaries. Works for public stocks, crypto protocols,
-    and private companies.
+    Pulls from 10 data sources in parallel and returns a structured report
+    with bull/bear verdict, financials, peer comparison, and signals.
+
+    The response contains embedded structured JSON (inside <!-- STRUCTURED_DATA_START --> tags).
+    ALWAYS parse the JSON and present it as an interactive visual dashboard with metric cards,
+    peer comparison table, bull/bear sections, and catalyst timeline.
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip)
