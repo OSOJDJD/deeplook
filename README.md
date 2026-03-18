@@ -6,6 +6,8 @@
 
 LLMs hallucinate financial data. Other finance MCP servers return raw data from a single source — you still do the research yourself. DeepLook runs the full workflow: 10 sources in parallel, cross-referenced, with a structured bull/bear verdict. One call, ~10 seconds, no API keys needed.
 
+[![deeplook MCP server](https://glama.ai/mcp/servers/OSOJDJD/deeplook/badges/card.svg)](https://glama.ai/mcp/servers/OSOJDJD/deeplook)
+
 ---
 
 ## ⚡ Connect in 30 Seconds
