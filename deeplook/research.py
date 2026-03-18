@@ -148,6 +148,32 @@ DISAMBIGUATION = {
         "skip_yfinance": False,
         "note": "Figma, design tool, IPO 2025",
     },
+    # Preventive: common company names that could be mis-routed to crypto tokens
+    "tesla": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "Tesla Inc (TSLA), EV and energy company",
+    },
+    "apple": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "Apple Inc (AAPL), consumer electronics",
+    },
+    "amazon": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "Amazon.com Inc (AMZN), e-commerce and cloud",
+    },
+    "meta": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "Meta Platforms (META), social media",
+    },
+    "google": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "Alphabet / Google (GOOGL), search and cloud",
+    },
 }
 
 
@@ -830,6 +856,23 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
         _v = _meta.pop(f"_timing_{_k}", None)
         if _v is not None:
             _timing[_k] = _v
+
+    # ── LLM peer fallback: if no peer_comparison yet, use tickers from judgment ──
+    if not peer_comparison:
+        try:
+            _cl = (judgment.get("competitive_landscape") or {})
+            _llm_tickers = [
+                t.strip().upper() for t in (_cl.get("peer_tickers") or [])[:3]
+                if isinstance(t, str) and t.strip()
+            ]
+            if _llm_tickers:
+                print(f"[peers] LLM-suggested tickers: {_llm_tickers}")
+                peer_comparison = await asyncio.wait_for(
+                    fetch_peer_data(_llm_tickers), timeout=5.0
+                )
+                print(f"[peers] LLM batch got {len(peer_comparison)} records")
+        except Exception as _e:
+            print(f"[peers] LLM peer batch failed: {_e}")
 
     _timing["total_wall"] = round(time.time() - t0, 2)
 

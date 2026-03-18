@@ -197,6 +197,10 @@ async def fetch_yfinance(company_name: str) -> dict:
         "rsi14": None,
         # Upcoming catalysts
         "earnings_date": None,
+        # Leadership & company profile
+        "peg_ratio": None,
+        "ceo_name": None,
+        "ceo_title": None,
         # Identity fields (used by validate_result)
         "shortName": None,
         "longName": None,
@@ -234,6 +238,17 @@ async def fetch_yfinance(company_name: str) -> dict:
         result["free_cashflow"] = info.get("freeCashflow")
         result["recommendation_key"] = info.get("recommendationKey")
         result["target_mean_price"] = info.get("targetMeanPrice")
+
+        # Leadership & company profile
+        result["peg_ratio"] = info.get("trailingPegRatio")
+        try:
+            officers = info.get("companyOfficers") or []
+            if officers:
+                ceo = officers[0]
+                result["ceo_name"] = ceo.get("name")
+                result["ceo_title"] = ceo.get("title")
+        except Exception:
+            pass
 
         # Peer comparison fields
         result["trailingPE"] = info.get("trailingPE")

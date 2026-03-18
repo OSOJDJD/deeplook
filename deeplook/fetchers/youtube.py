@@ -56,7 +56,7 @@ def _parse_vtt_to_segments(data: str) -> list[str]:
     return segs
 
 
-def _fetch_sub_url(url: str, timeout: int = 10) -> str:
+def _fetch_sub_url(url: str, timeout: int = 3) -> str:
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.get(url)
@@ -67,7 +67,7 @@ def _fetch_sub_url(url: str, timeout: int = 10) -> str:
     return ""
 
 
-def _extract_relevant_segments(entry: dict, transcript_timeout: int = 10) -> str:
+def _extract_relevant_segments(entry: dict, transcript_timeout: int = 3) -> str:
     """Download transcript and return only keyword-relevant segments (≤15k chars)."""
     sub_sources = [
         entry.get("subtitles", {}).get("en", []),
@@ -142,7 +142,7 @@ def _qualifies_for_transcript(title: str, channel: str) -> bool:
 
 def _fetch_youtube(query: str, max_results: int = 5,
                    max_age_days: int | None = None,
-                   transcript_timeout: int = 10,
+                   transcript_timeout: int = 3,
                    max_transcript_videos: int = 2) -> dict:
     """
     Two-layer YouTube fetch:
@@ -157,7 +157,7 @@ def _fetch_youtube(query: str, max_results: int = 5,
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
-        "socket_timeout": 10,
+        "socket_timeout": 3,
         "ignoreerrors": True,
         "format": "bestaudio/best",
     }
@@ -235,7 +235,7 @@ def _fetch_youtube(query: str, max_results: int = 5,
 
 async def fetch_youtube(company_name: str, query: str | None = None,
                         max_results: int = 5, max_age_days: int | None = None,
-                        transcript_timeout: int = 10) -> dict:
+                        transcript_timeout: int = 3) -> dict:
     resolved_query = query or f"{company_name} CEO founder interview"
     print(f"[strategy] youtube query: {resolved_query!r} max_age_days={max_age_days}")
     try:

@@ -568,6 +568,9 @@ def format_report(data: dict, bold_mode: str = "ansi") -> None:
         bull = verdict.get("bull_case", "")
         bear = verdict.get("bear_case", "")
         wait = verdict.get("wait_for", "")
+        entry = verdict.get("entry_trigger", "")
+        risk_trigger = verdict.get("risk_trigger", "")
+        peer_ctx = verdict.get("peer_context", "")
         if not _is_empty(one_line):
             print(_wrap(one_line))
         if not _is_empty(bull):
@@ -576,6 +579,12 @@ def format_report(data: dict, bold_mode: str = "ansi") -> None:
             print(_wrap(f"🔴 {bear}", subsequent_indent=10))
         if not _is_empty(wait):
             print(_wrap(f"⏳ {wait}"))
+        if not _is_empty(entry):
+            print(_wrap(f"▶ Entry: {entry}", subsequent_indent=10))
+        if not _is_empty(risk_trigger):
+            print(_wrap(f"⚠ Exit if: {risk_trigger}", subsequent_indent=10))
+        if not _is_empty(peer_ctx):
+            print(_wrap(f"📊 {peer_ctx}"))
 
     # ── Footer ───────────────────────────────────────────────────────────────
     succeeded = len(data.get("sources_succeeded", []))
@@ -645,7 +654,8 @@ def _safe_pct(val):
 _BASE_SCHEMA_KEYS = frozenset({
     "company", "entity_type", "sector", "one_liner", "phase", "momentum",
     "price", "market_cap", "metrics", "valuation", "peers", "signals",
-    "verdict", "catalysts", "sources_count", "generation_time_sec",
+    "verdict", "catalysts", "guidance", "segments", "ceo",
+    "sources_count", "generation_time_sec",
 })
 
 def _clean_dict(d):
@@ -716,6 +726,7 @@ def build_structured_json(data):
             "operating_margin_pct": _safe(lambda: _safe_pct(yfd.get("operating_margins"))),
             "fcf_ttm": _safe(lambda: yfd.get("free_cashflow")),
             "pe_ratio": _safe(lambda: yfd.get("trailingPE")),
+            "peg_ratio": _safe(lambda: yfd.get("peg_ratio")),
             "ps_ratio": _safe(lambda: yfd.get("priceToSalesTrailing12Months")),
             "earnings_growth_pct": _safe(lambda: _safe_pct(yfd.get("earnings_growth"))),
         }.items()}
@@ -759,8 +770,8 @@ def build_structured_json(data):
     # signals — always present as list (base schema requirement)
     signals_list = []
     try:
-        ss = sorted(sig, key=lambda s: s.get("date","") or "", reverse=True)[:5]
-        signals_list = [{"date": s.get("date"), "sentiment": s.get("sentiment"), "summary": s.get("summary")} for s in ss]
+        ss = sorted(sig, key=lambda s: s.get("date","") or "", reverse=True)[:8]
+        signals_list = [{"date": s.get("date"), "sentiment": s.get("sentiment"), "alert_type": s.get("alert_type", "normal"), "summary": s.get("summary")} for s in ss]
     except Exception:
         pass
 
@@ -771,13 +782,31 @@ def build_structured_json(data):
     except Exception:
         pass
 
-    # verdict — always present with all 4 keys (base schema requirement)
+    # verdict — always present with base 4 keys; stance/triggers added by validate_verdict (optional)
     verdict_obj = {
         "one_line": _safe(lambda: vd.get("one_line")) or None,
         "bull_case": _safe(lambda: vd.get("bull_case")) or None,
         "bear_case": _safe(lambda: vd.get("bear_case")) or None,
         "wait_for": _safe(lambda: vd.get("wait_for")) or None,
+        "stance": _safe(lambda: vd.get("stance")) or None,
+        "entry_trigger": _safe(lambda: vd.get("entry_trigger")) or None,
+        "risk_trigger": _safe(lambda: vd.get("risk_trigger")) or None,
+        "peer_context": _safe(lambda: vd.get("peer_context")) or None,
     }
+
+    # CEO from yfinance
+    _ceo = None
+    try:
+        _cn = _clean_junk(yfd.get("ceo_name"))
+        _ct = _clean_junk(yfd.get("ceo_title"))
+        if _cn:
+            _ceo = {"name": _cn, "title": _ct}
+    except Exception:
+        pass
+
+    # guidance + segments from ai_judgment (populated by ACT step)
+    _guidance = _safe(lambda: ai.get("guidance"))
+    _segments = _safe(lambda: ai.get("segments") or [], [])
 
     # Base schema — all keys always present, null if no data
     o = {
@@ -795,6 +824,9 @@ def build_structured_json(data):
         "signals": signals_list,
         "verdict": verdict_obj,
         "catalysts": catalysts_list,
+        "guidance": _guidance,
+        "segments": _segments,
+        "ceo": _ceo,
         "sources_count": _safe(lambda: len(data.get("sources_succeeded",[])), 0),
         "generation_time_sec": _safe(lambda: data.get("elapsed_seconds")),
     }
@@ -860,6 +892,11 @@ def build_structured_json(data):
     except Exception:
         pass
 
+    # analysis_context from validate_verdict (optional — only present if validate ran)
+    _analysis_ctx = _safe(lambda: ai.get("analysis_context"))
+    if _analysis_ctx:
+        o["analysis_context"] = _analysis_ctx
+
     # Safety net: base schema list keys must always be present
     for _bk in ("peers", "signals", "catalysts"):
         if _bk not in o:
@@ -897,11 +934,15 @@ def format_summary_markdown(data):
             L.append("- " + ic + " " + (s.get("date","")) + " \u2014 " + (s.get("summary","")))
         L.append("")
     ol = vd.get("one_line",""); bu = vd.get("bull_case",""); be = vd.get("bear_case",""); wa = vd.get("wait_for","")
+    entry = vd.get("entry_trigger",""); risk_t = vd.get("risk_trigger",""); peer_ctx = vd.get("peer_context","")
     if ol:
         L.append("**Verdict:** " + ol)
         if bu: L.append("- \U0001F7E2 " + bu)
         if be: L.append("- \U0001F534 " + be)
         if wa: L.append("- \u23F3 " + wa)
+        if entry: L.append("- \u25B6 Entry: " + entry)
+        if risk_t: L.append("- \u26A0 Exit if: " + risk_t)
+        if peer_ctx: L.append("- \U0001F4CA " + peer_ctx)
         L.append("")
     cats = j.get("upcoming_catalysts") or []
     if cats:
@@ -947,21 +988,37 @@ def format_dual_output(data):
         _lines.append(f"llm_extract: {_tm.get('llm_extract', '?')}s")
         _lines.append(f"llm_judge: {_tm.get('llm_judge', '?')}s")
         _lines.append(f"llm_act: {_tm.get('llm_act', '?')}s")
+        _validate_t = ((data.get("judgment") or data).get("metadata") or {}).get("_timing_llm_validate")
+        _lines.append(f"llm_validate: {_validate_t if _validate_t is not None else '?'}s")
         _lines.append(f"formatter: {_formatter_time}s")
         _lines.append(f"total_wall: {_tm.get('total_wall', '?')}s")
         timing_block = "\n\n<!-- TIMING_DEBUG\n" + "\n".join(_lines) + "\n-->"
 
     display_hint = """<!-- DISPLAY_HINT:
 Build an HTML artifact dashboard with these sections in order:
-1. HEADER: Company name, ticker, price, phase badge (green=EXPANDING, yellow=STABLE, red=CONTRACTING), momentum badge
-2. METRIC CARDS ROW: 4 cards — Market Cap, P/E ratio, Revenue Growth %, FCF. Use the metrics and valuation objects.
-3. VERDICT BOX: One-line verdict in bold. Bull case (green left border), Bear case (red left border), Wait for (amber left border).
-4. SIGNALS TIMELINE: Recent signals with colored dots (green=positive, red=negative, yellow=neutral) and dates.
-5. PEER TABLE: If peers array is non-empty, show comparison table with columns: Name, Price, Market Cap, P/E, Revenue Growth, Gross Margin.
-6. CATALYSTS: Upcoming events with dates.
-7. FOOTER: Sources count, generation time, DeepLook link.
 
-Style: Clean, professional. White/light background cards with subtle shadows. Use system fonts. No excessive color.
+1. HEADER: Company name, ticker, price with 30d change, phase badge (green=EXPANDING, yellow=STABLE, red=CONTRACTING), momentum badge.
+   Sub-line: CEO name and title (from ceo object), HQ location, founded year, employee count.
+
+2. CRITICAL ALERTS: If any signal has alert_type="critical", show as highlighted warning box (amber background, bold text) ABOVE everything else.
+
+3. METRIC CARDS ROW: 4-6 cards — Market Cap, P/E ratio (show PEG if available from metrics.peg_ratio), Revenue Growth %, Operating Margin, FCF, Earnings Growth. Use the metrics and valuation objects.
+
+4. VERDICT BOX: One-line verdict in bold. Stance badge (green=bullish, red=bearish, grey=neutral). Bull case (green left border), Bear case (red left border), Wait for (amber left border). If entry_trigger present: show as "▶ Entry:" row. If risk_trigger present: show as "⚠ Exit if:" row. If peer_context present: show as italic comparison note below verdict.
+
+5. GUIDANCE TABLE: If guidance is non-null, show forward guidance as compact table with columns: Metric, Guidance Value, Sentiment (green=strong, amber=in-line, red=weak).
+
+6. BUSINESS SEGMENTS: If segments array is non-empty, show as compact list or horizontal bar chart with segment name, metric, and context.
+
+7. SIGNALS TIMELINE: 5-8 signals with colored dots (green=positive, red=negative, yellow=neutral) and dates.
+
+8. PEER TABLE: If peers array is non-empty, show comparison table with columns: Name, Price, Market Cap, P/E, Revenue Growth, Gross Margin. Highlight the subject company row.
+
+9. CATALYSTS: Upcoming events with dates.
+
+10. FOOTER: Sources count, generation time, DeepLook link.
+
+Style: Clean, professional. Light background cards with subtle borders. Monospace font for numbers. System fonts for text.
 If a section's data is null/empty, skip that section entirely — do not show empty placeholders.
 -->"""
     return summary + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n\n" + display_hint + timing_block

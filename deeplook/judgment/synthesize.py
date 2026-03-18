@@ -1,15 +1,17 @@
 """
-judgment/synthesize.py — Three-stage LLM pipeline
+judgment/synthesize.py — Four-stage LLM pipeline
 
-  Call 1 (extract)  — Haiku:   extract facts + format display fields
-  Call 2 (judge)    — Sonnet:  assess phase / momentum / risks
-  Call 3 (act)      — Sonnet:  produce actionable verdict
+  Call 1 (extract)   — Haiku:   extract facts + format display fields
+  Call 2 (judge)     — Sonnet:  assess phase / momentum / risks
+  Call 3 (act)       — Sonnet:  produce actionable verdict
+  Call 4 (validate)  — Sonnet:  sharpen verdict with stance + triggers
 
 Model selection (Anthropic-first, falls back through OpenAI → Gemini → DeepSeek):
   Override per-role via env vars:
-    DEEPLOOK_EXTRACT_MODEL   (default: claude-haiku-4-5-20251001)
-    DEEPLOOK_JUDGE_MODEL     (default: claude-sonnet-4-5-20250514)
-    DEEPLOOK_ACT_MODEL       (default: claude-sonnet-4-5-20250514)
+    DEEPLOOK_EXTRACT_MODEL    (default: claude-haiku-4-5-20251001)
+    DEEPLOOK_JUDGE_MODEL      (default: claude-sonnet-4-5-20250929)
+    DEEPLOOK_ACT_MODEL        (default: claude-sonnet-4-5-20250929)
+    DEEPLOOK_VALIDATE_MODEL   (default: claude-sonnet-4-5-20250929)
 """
 
 import os
@@ -24,24 +26,28 @@ from ..debug_log import log
 # ── Model defaults ────────────────────────────────────────────────────────────
 
 _ANTHROPIC_DEFAULTS = {
-    "extract": "claude-haiku-4-5-20251001",
-    "judge":   "claude-sonnet-4-5-20250929",
-    "act":     "claude-sonnet-4-5-20250929",
+    "extract":  "claude-haiku-4-5-20251001",
+    "judge":    "claude-sonnet-4-5-20250929",
+    "act":      "claude-sonnet-4-5-20250929",
+    "validate": "claude-sonnet-4-5-20250929",
 }
 _OPENAI_DEFAULTS = {
-    "extract": "gpt-4o-mini",
-    "judge":   "gpt-4o",
-    "act":     "gpt-4o",
+    "extract":  "gpt-4o-mini",
+    "judge":    "gpt-4o",
+    "act":      "gpt-4o",
+    "validate": "gpt-4o",
 }
 _GEMINI_DEFAULTS = {
-    "extract": "gemini-2.0-flash-lite",
-    "judge":   "gemini-2.0-flash",
-    "act":     "gemini-2.0-flash",
+    "extract":  "gemini-2.0-flash-lite",
+    "judge":    "gemini-2.0-flash",
+    "act":      "gemini-2.0-flash",
+    "validate": "gemini-2.0-flash",
 }
 _DEEPSEEK_DEFAULTS = {
-    "extract": "deepseek-chat",
-    "judge":   "deepseek-chat",
-    "act":     "deepseek-chat",
+    "extract":  "deepseek-chat",
+    "judge":    "deepseek-chat",
+    "act":      "deepseek-chat",
+    "validate": "deepseek-chat",
 }
 
 def _llm_timeout() -> float:
@@ -289,7 +295,8 @@ Return valid JSON only. No markdown, no explanation.
   },
   "competitive_landscape": {
     "main_competitors": ["name1", "name2"],
-    "comparison_note": "one line per competitor: 'vs [Name]: [one sentence comparison]'"
+    "comparison_note": "one line per competitor: 'vs [Name]: [one sentence comparison]'",
+    "peer_tickers": ["TICK1", "TICK2", "TICK3"]
   },
   "recent_signals": [
     {
@@ -298,7 +305,8 @@ Return valid JSON only. No markdown, no explanation.
       "summary": "what happened",
       "so_what": "[consequence] → Watch: [specific observable indicator]",
       "source_url": "url or empty string",
-      "sentiment": "positive|negative|neutral"
+      "sentiment": "positive|negative|neutral",
+      "alert_type": "critical|normal"
     }
   ],
   "upcoming_catalysts": [
@@ -323,6 +331,21 @@ Always populate both categories if evidence exists. Do NOT leave upcoming_events
 IMPORTANT for market_data.key_metrics:
 - Array of strings, max 6 items, format "Label: Value"
 - Specific numbers only. If unavailable, omit the entry entirely.
+
+IMPORTANT for recent_signals:
+- Generate 5 to 8 signals ordered by date descending (most recent first).
+- alert_type = "critical" for: M&A activity, CEO/leadership changes, earnings miss >10%, major regulatory actions, significant lawsuits, going-concern warnings, or delisting risks. All other signals use alert_type = "normal".
+
+IMPORTANT for competitive_landscape.peer_tickers:
+- Add up to 3 ticker symbols of the most comparable publicly-traded competitors.
+- Use only real, active tickers. For private/crypto companies, use the closest public proxy (e.g. COIN for a crypto exchange, ABNB for a private travel startup).
+- If no comparable public peers exist, set peer_tickers = [].
+
+IMPORTANT for business segments:
+- If the fetched data contains segment-level breakdowns (e.g. from SEC filings, earnings call transcripts, news), extract 3-6 segments as an array:
+  "segments": [{"name": "Segment Name", "metric": "+X% YoY or $XB", "context": "brief note"}]
+- If no segment data is available, set "segments": [].
+- Add the segments field to the root-level JSON output.
 """
 
 JUDGE_SYSTEM = """You are a company phase assessment agent. You receive structured facts about a company. Assign phase and momentum ONLY based on the facts provided. Do not use general knowledge to fill gaps.
@@ -416,7 +439,54 @@ ACT_SYSTEM = """You are an action recommendation agent. You receive company fact
   "wait_for": "ONE specific event with timeline from upcoming_events, or 'No confirmed catalyst in current sources'",
   "wait_for_source": "exact text of the upcoming_events entry used, or null",
   "action": "research_deeper|monitor|avoid|wait_for_catalyst",
-  "confidence": "high|medium|low"
+  "confidence": "high|medium|low",
+  "guidance": {
+    "period": "FY2026 or Q1 2026",
+    "items": [
+      {"metric": "Revenue", "guidance": "$34-35B", "sentiment": "in-line"},
+      {"metric": "EPS", "guidance": "Mid-single-digit decline", "sentiment": "weak"}
+    ]
+  },
+  "segments": [
+    {"name": "Segment Name", "metric": "+X% YoY or $XB revenue", "context": "brief note"}
+  ]
+}
+
+IMPORTANT for guidance: Extract forward guidance from earnings calls, press releases, or investor presentations found in the fetched data. Use sentiment "strong" (beats/raises), "in-line" (meets), or "weak" (misses/cuts). If no forward guidance is available in the sources, set guidance = null.
+
+IMPORTANT for segments: Extract 3-6 business segment metrics from SEC filings, earnings transcripts, or news if available. If no segment data exists in the sources, set segments = [].
+"""
+
+
+VALIDATE_SYSTEM = """You are a verdict validation and refinement agent. You receive a preliminary verdict, structured facts, and peer data. Produce a sharper, opinionated verdict with explicit stance and actionable triggers.
+
+## Hard Rules
+1. Take a clear stance — bullish, bearish, or neutral. Do not hedge.
+2. entry_trigger: ONE specific, observable condition that would justify entering a position (e.g. "Revenue growth re-accelerates above 20% YoY in next earnings", "Stock pulls back below $X support"). Must be concrete.
+3. risk_trigger: ONE specific, observable condition that would force exit or avoidance (e.g. "Operating margin falls below 10%", "Key customer contract lost"). Must be concrete.
+4. peer_context: ONE sentence comparing valuation to peers using real numbers from peer data. If no peer data available, set to null.
+5. Rewrite one_line to have a clear directional stance. Max 15 words. No filler.
+6. If bull_case narrative contradicts signals (e.g. bull says accelerating but signals show deceleration), note the gap in analysis_context.narrative_gap and side with the data.
+7. FORBIDDEN phrases — never output: "demands scrutiny", "mixed signals", "investors should monitor", "presents both opportunities and challenges", "warrants attention", "remains to be seen", "complex landscape".
+8. analysis_context: compute from provided data. Set any field to null if the data to compute it is absent.
+
+## Output (valid JSON only):
+{
+  "one_line": "max 15 words, directional stance, no filler",
+  "bull_case": "copy from input or sharpen with specific numbers from facts",
+  "bear_case": "copy from input or sharpen with specific numbers from facts",
+  "wait_for": "copy exactly from preliminary_verdict.wait_for",
+  "stance": "bullish|bearish|neutral",
+  "entry_trigger": "ONE specific observable condition to enter",
+  "risk_trigger": "ONE specific observable condition to exit or avoid",
+  "peer_context": "ONE sentence vs peers with real numbers, or null",
+  "analysis_context": {
+    "peer_relative_pe": "e.g. 'Trades at 45x vs peer avg 32x — 41% premium' or null",
+    "peer_relative_ps": "e.g. 'P/S 18x vs peers 12x avg' or null",
+    "growth_vs_valuation": "e.g. 'Revenue +28% YoY but PE premium suggests market already pricing in growth' or null",
+    "technical_summary": "e.g. 'Below 50d MA, RSI 42 — not oversold yet' or null",
+    "narrative_gap": "e.g. 'Bull cites AI growth but 3 of last 5 signals show margin compression' or null"
+  }
 }
 """
 
@@ -533,7 +603,14 @@ def _assemble(
             "bull_case": verdict.get("bull_case", ""),
             "bear_case": verdict.get("bear_case", ""),
             "wait_for": verdict.get("wait_for", ""),
+            "stance": verdict.get("stance"),
+            "entry_trigger": verdict.get("entry_trigger"),
+            "risk_trigger": verdict.get("risk_trigger"),
+            "peer_context": verdict.get("peer_context"),
         },
+        "analysis_context": verdict.get("analysis_context"),
+        "guidance": verdict.get("guidance"),
+        "segments": verdict.get("segments") or facts.get("segments") or [],
     }
     return {
         "company_name": facts.get("company_name", company_name),
@@ -676,6 +753,35 @@ def recommend_action(facts: dict, judgment: dict) -> tuple[dict, str, int]:
     return result, model, tokens
 
 
+def validate_verdict(facts: dict, judgment: dict, verdict: dict) -> tuple[dict, str, int]:
+    """Call 4 (Sonnet): Sharpen verdict with stance, entry/risk triggers, and peer context."""
+    input_data = {
+        "preliminary_verdict": verdict,
+        "judgment": {
+            "phase": judgment.get("phase"),
+            "momentum": judgment.get("momentum"),
+            "bull_case": judgment.get("bull_case"),
+            "bear_case": judgment.get("bear_case"),
+            "risks": judgment.get("risks"),
+        },
+        "facts": {
+            "company_name": facts.get("company_name"),
+            "entity_type": facts.get("entity_type"),
+            "price": facts.get("price"),
+            "financials": facts.get("financials"),
+            "valuation": facts.get("valuation"),
+            "competitive_landscape": facts.get("competitive_landscape"),
+            "recent_signals": facts.get("recent_signals", [])[:5],
+        },
+    }
+    prompt = json.dumps(input_data, indent=2) + "\n\nRespond with valid JSON only."
+    log("validate_verdict", "START", f"input_chars={len(prompt)}")
+
+    result, model, tokens = _call_llm_with_retry(prompt, VALIDATE_SYSTEM, "validate", "validate_verdict")
+    print(f"[validate_verdict] model={model}, tokens={tokens}")
+    return result, model, tokens
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def synthesize(
@@ -685,7 +791,7 @@ def synthesize(
     total_time: float,
     api_call_count: int,
 ) -> dict:
-    """Run the three-stage pipeline: extract → judge → act.
+    """Run the four-stage pipeline: extract → judge → act → validate.
     Returns formatter-compatible JSON.
     """
     total_tokens = 0
@@ -766,6 +872,21 @@ def synthesize(
     # Validation 3: ensure wait_for references a real upcoming_event
     _validate_wait_for_source(verdict, facts)
 
+    # ── Call 4: Validate ───────────────────────────────────────────────────
+    _t4 = time.time()
+    try:
+        validated, model4, tokens4 = validate_verdict(facts, judgment, verdict)
+        models_used.append(model4)
+        total_tokens += tokens4
+        # Merge: original verdict as base, validated fields override
+        verdict = {**verdict, **validated}
+        if not verdict.get("wait_for"):
+            verdict["wait_for"] = "No confirmed catalyst in current sources"
+    except Exception as e:
+        log("synthesize", "VALIDATE_FAIL", str(e))
+        print(f"[synthesize] validate_verdict failed: {e} — using original verdict")
+    _timing_validate = round(time.time() - _t4, 2)
+
     result = _assemble(
         company_name, facts, judgment, verdict,
         total_time, api_call_count, models_used, total_tokens
@@ -775,4 +896,5 @@ def synthesize(
         result["metadata"]["_timing_llm_extract"] = _timing_extract
         result["metadata"]["_timing_llm_judge"] = _timing_judge
         result["metadata"]["_timing_llm_act"] = _timing_act
+        result["metadata"]["_timing_llm_validate"] = _timing_validate
     return result
