@@ -1,16 +1,24 @@
 # 🔍 DeepLook
 
-**Free Bloomberg Terminal for AI Agents** — open-source MCP server that researches any company in ~10 seconds.
+**Free Bloomberg Terminal for AI Agents** — open-source MCP server that researches any company in under a minute.
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue) ![MIT License](https://img.shields.io/badge/license-MIT-green) ![MCP Compatible](https://img.shields.io/badge/MCP-compatible-purple)
 
-LLMs hallucinate financial data. Other finance MCP servers return raw data from a single source — you still do the research yourself. DeepLook runs the full workflow: 10 sources in parallel, cross-referenced, with a structured bull/bear verdict. One call, ~10 seconds, no API keys needed.
+LLMs hallucinate financial data. Other finance MCP servers return raw data from a single source — you still do the research yourself. DeepLook runs the full workflow: 10 sources in parallel, cross-referenced, with a structured bull/bear verdict. One call, in under a minute, no API keys needed.
 
 [![deeplook MCP server](https://glama.ai/mcp/servers/OSOJDJD/deeplook/badges/card.svg)](https://glama.ai/mcp/servers/OSOJDJD/deeplook)
 
+<p align="center">
+  <img src="docs/nvidia-report.png" alt="DeepLook NVIDIA Report" width="600">
+  <br>
+  <em>Ask "research NVIDIA" → get this in under a minute</em>
+</p>
+
 ---
 
-## ⚡ Connect in 30 Seconds
+## ⚡ Getting Started
+
+### Hosted (30 seconds)
 
 1. Claude.ai → **Settings → Connectors → Add MCP Server**
 2. Paste: `https://mcp.deeplook.dev/mcp`
@@ -18,47 +26,7 @@ LLMs hallucinate financial data. Other finance MCP servers return raw data from 
 
 Works with Claude Desktop, Cursor, Windsurf, or any MCP-compatible client.
 
----
-
-## What You Get
-
-```
-NVIDIA Corporation — $181.93 | EXPANDING / ACCELERATING
-Key Signals:
-
-🟢 Jensen Huang projects $1T AI chip revenue by 2027
-🟢 Vera Rubin platform with 7 new chips in production
-🔴 Earnings surprise: -55.03%
-
-Verdict: Mega-cap AI leader with 73% revenue growth, $1T opportunity
-
-🟢 Revenue +73.2% YoY, earnings +95.6%, $58.1B FCF
-🔴 RSI 37.2 oversold, $4.42T valuation limits upside
-⏳ Wait for: Q1 FY2027 earnings on 2026-05-20
-```
-
-Embedded structured JSON with precise metrics, peer comparison, technicals
-→ AI clients auto-render as interactive dashboards
-
----
-
-## Features
-
-- 10+ data sources in parallel (yfinance, news, CoinGecko, DeFiLlama, SEC EDGAR, Wikipedia, YouTube, etc.)
-- Works for public stocks, crypto, and private companies
-- Dual output: human-readable summary + structured JSON for AI agents
-- Bull/bear verdict with catalyst timeline
-- Peer comparison with financial metrics
-- ~10 second research time
-- Two tools: `deeplook_research` (full report) and `deeplook_lookup` (quick snapshot)
-
-## Supported Entity Types
-
-Public Equity · Crypto/DeFi · Private Companies · Exchanges · VCs · Foundations
-
----
-
-## Self-Host
+### Self-Host
 
 **1. Clone and install:**
 
@@ -98,6 +66,44 @@ python -m deeplook "NVIDIA"
 python -m deeplook "Aave"
 python -m deeplook "Anthropic"
 ```
+
+---
+
+## What You Get
+
+```
+NVIDIA Corporation — $181.93 | EXPANDING / ACCELERATING
+Key Signals:
+
+🟢 Jensen Huang projects $1T AI chip revenue by 2027
+🟢 Vera Rubin platform with 7 new chips in production
+🔴 Earnings surprise: -55.03%
+
+Verdict: Mega-cap AI leader with 73% revenue growth, $1T opportunity
+
+🟢 Revenue +73.2% YoY, earnings +95.6%, $58.1B FCF
+🔴 RSI 37.2 oversold, $4.42T valuation limits upside
+⏳ Wait for: Q1 FY2027 earnings on 2026-05-20
+```
+
+Embedded structured JSON with precise metrics, peer comparison, technicals
+→ AI clients auto-render as interactive dashboards
+
+---
+
+## Features
+
+- 10+ data sources in parallel (yfinance, news, CoinGecko, DeFiLlama, SEC EDGAR, Wikipedia, YouTube, etc.)
+- Works for public stocks, crypto, and private companies
+- Dual output: human-readable summary + structured JSON for AI agents
+- Bull/bear verdict with catalyst timeline
+- Peer comparison with financial metrics
+- Lookup in seconds · full research in under a minute
+- Two tools: `deeplook_research` (full report) and `deeplook_lookup` (quick snapshot)
+
+## Supported Entity Types
+
+Public Equity · Crypto/DeFi · Private Companies · Exchanges · VCs · Foundations
 
 ---
 
