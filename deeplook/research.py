@@ -174,6 +174,43 @@ DISAMBIGUATION = {
         "skip_yfinance": False,
         "note": "Alphabet / Google (GOOGL), search and cloud",
     },
+    # TSMC: force public_equity path; fetch_yfinance will use TSM (ADR) via _TICKER_HARDCODED
+    "tsmc": {
+        "intended_type": "public_equity",
+        "skip_yfinance": False,
+        "note": "TSMC (Taiwan Semiconductor) — use TSM ADR to avoid TWD currency mismatch",
+    },
+    # Known private companies — prevent meme/micro-cap token misclassification on CoinGecko
+    "anduril": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "Anduril Industries, defense tech startup (not the meme token on CoinGecko)",
+    },
+    "spacex": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "SpaceX, aerospace manufacturer, private company",
+    },
+    "stripe": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "Stripe, fintech payments, private company",
+    },
+    "openai": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "OpenAI, AI research company, private",
+    },
+    "databricks": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "Databricks, data analytics platform, private",
+    },
+    "epic games": {
+        "intended_type": "private_or_unlisted",
+        "skip_yfinance": True,
+        "note": "Epic Games, game developer (Fortnite), private",
+    },
 }
 
 
@@ -262,7 +299,7 @@ async def _coingecko_search_mcap(company_name: str, client: httpx.AsyncClient) -
                     detail_resp.raise_for_status()
                     detail = detail_resp.json()
                     mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
-                    if mcap and mcap > 1_000_000:
+                    if mcap and mcap > 10_000_000:  # $10M threshold — ignore meme/micro-cap tokens
                         return coin_id, int(mcap)
                 except Exception:
                     pass
@@ -390,9 +427,11 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                     detail_resp.raise_for_status()
                     detail = detail_resp.json()
                     mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
-                    if mcap and mcap > 1_000_000:
+                    if mcap and mcap > 10_000_000:  # $10M threshold — ignore meme/micro-cap tokens
                         print(f"Detected type: crypto (matched coin '{coin.get('name')}' mcap=${mcap:,.0f})")
                         return "crypto", None, None
+                    elif mcap:
+                        print(f"[detect] MEME_TOKEN_SKIP: '{coin.get('name')}' mcap=${mcap:,.0f} < $10M threshold — treating as not-crypto")
                 except Exception:
                     pass
     except Exception as e:

@@ -3,7 +3,7 @@ judgment/synthesize.py — Four-stage LLM pipeline
 
   Call 1 (extract)   — Haiku:   extract facts + format display fields
   Call 2 (judge)     — Sonnet:  assess phase / momentum / risks
-  Call 3 (act)       — Sonnet:  produce actionable verdict
+  Call 3 (act)       — Haiku:   produce actionable verdict
   Call 4 (validate)  — Sonnet:  sharpen verdict with stance + triggers
 
 Model selection (Anthropic-first, falls back through OpenAI → Gemini → DeepSeek):
@@ -28,7 +28,7 @@ from ..debug_log import log
 _ANTHROPIC_DEFAULTS = {
     "extract":  "claude-haiku-4-5-20251001",
     "judge":    "claude-sonnet-4-5-20250929",
-    "act":      "claude-sonnet-4-5-20250929",
+    "act":      "claude-haiku-4-5-20251001",
     "validate": "claude-sonnet-4-5-20250929",
 }
 _OPENAI_DEFAULTS = {
@@ -87,7 +87,8 @@ def _clean_json_text(raw: str) -> tuple[str, str]:
 # ── LLM caller ────────────────────────────────────────────────────────────────
 
 def get_llm_response(
-    prompt: str, system_prompt: str = None, model_role: str = "extract"
+    prompt: str, system_prompt: str = None, model_role: str = "extract",
+    temperature: float = 0, max_tokens: int = 4096,
 ) -> tuple[str, str, int]:
     """Call LLM with model selected by role. Timeout: 10s per call.
     Returns (response_text, model_name, tokens_used).
@@ -101,8 +102,8 @@ def get_llm_response(
             client = _anthropic.Anthropic(api_key=anthropic_key)
             kwargs = dict(
                 model=model,
-                max_tokens=4096,
-                temperature=0,
+                max_tokens=max_tokens,
+                temperature=temperature,
                 timeout=_llm_timeout(),
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -127,7 +128,7 @@ def get_llm_response(
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             response = client.chat.completions.create(
-                model=model, max_tokens=4096, temperature=0, messages=messages
+                model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
             )
             tokens = response.usage.total_tokens if response.usage else 0
             return response.choices[0].message.content, model, tokens
@@ -165,7 +166,7 @@ def get_llm_response(
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             response = client.chat.completions.create(
-                model=model, max_tokens=4096, temperature=0, messages=messages
+                model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
             )
             tokens = response.usage.total_tokens if response.usage else 0
             return response.choices[0].message.content, model, tokens
@@ -215,6 +216,8 @@ Look at the Type field to determine which data to extract:
 ### foundation / crypto
 - Must report: token symbol, market cap, FDV. If TVL not found, write "TVL: Not available from sources".
 - For blockchain foundations, look for the chain's metrics (TVL, TPS, txns), not the foundation entity's corporate data.
+- OWN METRICS FIRST RULE: When analyzing any crypto entity, ALWAYS state the subject entity's OWN key metrics (TVL, fees, DEX volume, active addresses) BEFORE mentioning any competitor's specific numbers. If you cite a competitor metric (e.g. "Ethereum generated $263M in DeFi fees"), you MUST first state the subject entity's equivalent figure in the same section. If the subject's data is not available, write "[subject] equivalent: Not available from sources".
+- LAYER 1 REQUIRED FIELDS: For major Layer 1 blockchains (Solana, Ethereum, Bitcoin, and similar L1s), MUST extract ALL of the following if they exist anywhere in the provided data: (1) TVL from DeFiLlama data, (2) ETF filing or approval status if mentioned in any source, (3) on-chain revenue or protocol fees for a recent period. Failing to extract these when the data is present is a critical omission — add them to missing_data[] if not found.
 
 ### defunct
 - valuation = {"note": "Defunct company — ceased operations"}
@@ -346,6 +349,8 @@ IMPORTANT for business segments:
   "segments": [{"name": "Segment Name", "metric": "+X% YoY or $XB", "context": "brief note"}]
 - If no segment data is available, set "segments": [].
 - Add the segments field to the root-level JSON output.
+
+REMINDER: Only state facts found in sources. Never hallucinate. Return valid JSON only.
 """
 
 JUDGE_SYSTEM = """You are a company phase assessment agent. You receive structured facts about a company. Assign phase and momentum ONLY based on the facts provided. Do not use general knowledge to fill gaps.
@@ -357,6 +362,7 @@ JUDGE_SYSTEM = """You are a company phase assessment agent. You receive structur
 4. DISTRESS requires 2+ confirmed signals: bankruptcy/Chapter 11/defunct confirmed in Wikipedia OR layoffs >20% workforce OR SEC/DOJ enforcement OR delisting OR ceased operations confirmed by multiple sources. A single negative article is NOT sufficient.
 5. If len(missing_data) > 50% of total fact fields, add "low_confidence": true.
 6. You MUST reference every important quantitative figure from the facts in bull_case, bear_case, or risks. Do not omit any revenue, ARR, deal size, analyst target price, TVL, mcap/TVL ratio, or other numeric data present in the facts. If facts contain 10 numbers, your output must cite at least 8 of them across bull_case + bear_case + risks combined.
+7. bear_case MUST include at least one macro or geopolitical risk factor relevant to this company. Examples: tariffs, export controls, interest rate policy, commodity price risk, regulatory changes, geopolitical tensions. If no obvious macro risk applies, briefly state why the company is relatively insulated (e.g. "domestic-only revenue base insulates from tariff risk").
 
 ## Phase Definitions
 - EXPANDING: Active growth — revenue up, new markets, recent fundraising, strong positive catalysts
@@ -406,6 +412,8 @@ Use funding stage as primary proxy:
   ],
   "low_confidence": false
 }
+
+REMINDER: Phase must reflect CURRENT status from provided facts only. Return valid JSON only.
 """
 
 ACT_SYSTEM = """You are an action recommendation agent. You receive company facts and a judgment. Produce a concise, evidence-based action recommendation.
@@ -455,6 +463,8 @@ ACT_SYSTEM = """You are an action recommendation agent. You receive company fact
 IMPORTANT for guidance: Extract forward guidance from earnings calls, press releases, or investor presentations found in the fetched data. Use sentiment "strong" (beats/raises), "in-line" (meets), or "weak" (misses/cuts). If no forward guidance is available in the sources, set guidance = null.
 
 IMPORTANT for segments: Extract 3-6 business segment metrics from SEC filings, earnings transcripts, or news if available. If no segment data exists in the sources, set segments = [].
+
+REMINDER: Every claim must cite specific data. No generic statements. Return valid JSON only.
 """
 
 
@@ -469,6 +479,7 @@ VALIDATE_SYSTEM = """You are a verdict validation and refinement agent. You rece
 6. If bull_case narrative contradicts signals (e.g. bull says accelerating but signals show deceleration), note the gap in analysis_context.narrative_gap and side with the data.
 7. FORBIDDEN phrases — never output: "demands scrutiny", "mixed signals", "investors should monitor", "presents both opportunities and challenges", "warrants attention", "remains to be seen", "complex landscape".
 8. analysis_context: compute from provided data. Set any field to null if the data to compute it is absent.
+9. Before finalizing, verify all entry/exit conditions are logically and mathematically consistent. Specific checks: (a) If entry_price is below a stated support level (e.g. MA), the support is broken — do not say "while maintaining support above [higher price]". (b) If a per-unit cost is derived by division, verify numerator and denominator are from the same business segment. (c) If an event appears in signals as completed, it cannot also appear as an upcoming catalyst.
 
 ## Output (valid JSON only):
 {
@@ -488,6 +499,8 @@ VALIDATE_SYSTEM = """You are a verdict validation and refinement agent. You rece
     "narrative_gap": "e.g. 'Bull cites AI growth but 3 of last 5 signals show margin compression' or null"
   }
 }
+
+REMINDER: Take a clear stance. Do not hedge. Check all numbers for mathematical consistency. Return valid JSON only.
 """
 
 
@@ -525,7 +538,7 @@ def generate_search_queries(company_name: str, entity_type: str, round1_data: di
     )
     try:
         result, _, tokens = _call_llm_with_retry(
-            prompt, QUERY_GEN_SYSTEM, "extract", "generate_search_queries"
+            prompt, QUERY_GEN_SYSTEM, "extract", "generate_search_queries", temperature=0.3, max_tokens=1024
         )
         log("generate_search_queries", "OK", f"tokens={tokens}")
         return result if isinstance(result, dict) else {"youtube_queries": [company_name], "news_queries": [f"{company_name} latest news"]}
@@ -537,10 +550,11 @@ def generate_search_queries(company_name: str, entity_type: str, round1_data: di
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _call_llm_with_retry(
-    prompt: str, system_prompt: str, model_role: str, call_name: str
+    prompt: str, system_prompt: str, model_role: str, call_name: str,
+    temperature: float = 0, max_tokens: int = 4096,
 ) -> tuple[dict, str, int]:
     """Call LLM, parse JSON, retry once on failure. Returns (result_dict, model, tokens)."""
-    raw_text, model, tokens = get_llm_response(prompt, system_prompt, model_role)
+    raw_text, model, tokens = get_llm_response(prompt, system_prompt, model_role, temperature, max_tokens)
     log(call_name, "API_RESPONSE", f"model={model}, tokens={tokens}, length={len(raw_text)}")
 
     text, _ = _clean_json_text(raw_text)
@@ -550,7 +564,7 @@ def _call_llm_with_retry(
         log(call_name, "JSON_PARSE_FAIL", raw_text[:200])
         print(f"[{call_name}] JSON parse failed: {e} — retrying")
         retry_prompt = prompt + "\n\nYour previous response was not valid JSON. Respond with valid JSON only, no markdown."
-        raw_text2, model2, tokens2 = get_llm_response(retry_prompt, system_prompt, model_role)
+        raw_text2, model2, tokens2 = get_llm_response(retry_prompt, system_prompt, model_role, temperature, max_tokens)
         text2, _ = _clean_json_text(raw_text2)
         try:
             return json.loads(text2), model2, tokens + tokens2
@@ -706,7 +720,7 @@ def extract_facts(
     prompt = user_message + "\n\nRespond with valid JSON only. No markdown, no explanation."
     log("extract_facts", "START", f"input_chars={len(user_message)}")
 
-    result, model, tokens = _call_llm_with_retry(prompt, EXTRACT_SYSTEM, "extract", "extract_facts")
+    result, model, tokens = _call_llm_with_retry(prompt, EXTRACT_SYSTEM, "extract", "extract_facts", temperature=0.2, max_tokens=4096)
     print(f"[extract_facts] model={model}, tokens={tokens}")
     return result, model, tokens
 
@@ -726,7 +740,7 @@ def judge(facts: dict) -> tuple[dict, str, int]:
     prompt = json.dumps(facts_for_judge, indent=2) + "\n\nRespond with valid JSON only."
     log("judge", "START", f"input_chars={len(prompt)}")
 
-    result, model, tokens = _call_llm_with_retry(prompt, JUDGE_SYSTEM, "judge", "judge")
+    result, model, tokens = _call_llm_with_retry(prompt, JUDGE_SYSTEM, "judge", "judge", temperature=0.4, max_tokens=2048)
     print(f"[judge] model={model}, tokens={tokens}")
     return result, model, tokens
 
@@ -748,7 +762,7 @@ def recommend_action(facts: dict, judgment: dict) -> tuple[dict, str, int]:
     prompt = json.dumps(input_data, indent=2) + "\n\nRespond with valid JSON only."
     log("recommend_action", "START", f"input_chars={len(prompt)}")
 
-    result, model, tokens = _call_llm_with_retry(prompt, ACT_SYSTEM, "act", "recommend_action")
+    result, model, tokens = _call_llm_with_retry(prompt, ACT_SYSTEM, "act", "recommend_action", temperature=0.1, max_tokens=3072)
     print(f"[recommend_action] model={model}, tokens={tokens}")
     return result, model, tokens
 
@@ -777,7 +791,7 @@ def validate_verdict(facts: dict, judgment: dict, verdict: dict) -> tuple[dict, 
     prompt = json.dumps(input_data, indent=2) + "\n\nRespond with valid JSON only."
     log("validate_verdict", "START", f"input_chars={len(prompt)}")
 
-    result, model, tokens = _call_llm_with_retry(prompt, VALIDATE_SYSTEM, "validate", "validate_verdict")
+    result, model, tokens = _call_llm_with_retry(prompt, VALIDATE_SYSTEM, "validate", "validate_verdict", temperature=0.3, max_tokens=2048)
     print(f"[validate_verdict] model={model}, tokens={tokens}")
     return result, model, tokens
 

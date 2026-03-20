@@ -15,6 +15,9 @@ CHAIN_OVERRIDES = {
     "ton": "TON",
     "ton foundation": "TON",
     "toncoin": "TON",
+    # Solana: use /v2/chains endpoint for chain-level TVL (not DeFi protocol endpoint)
+    "solana": "Solana",
+    "sol": "Solana",
 }
 
 SLUG_OVERRIDES = {

@@ -16,6 +16,8 @@ _TICKER_HARDCODED: dict[str, str] = {
     # Disambiguation: Coherent Corp (II-VI merger 2022), not old Coherent Inc
     "Coherent Corp": "COHR",
     "Coherent": "COHR",
+    # TSMC: force US ADR (TSM) to avoid TWD-denominated data from Taiwan listing (TSMC ticker)
+    "TSMC": "TSM",
 }
 
 
@@ -204,12 +206,14 @@ async def fetch_yfinance(company_name: str) -> dict:
         # Identity fields (used by validate_result)
         "shortName": None,
         "longName": None,
+        "data_quality_flag": None,
         "error": None,
     }
 
     try:
-        # 先嘗試直接用 company_name 當 ticker
-        info, hist, calendar = await asyncio.to_thread(_get_info, company_name)
+        # Check hardcoded ticker mapping first (e.g. TSMC → TSM to avoid ADR/currency mismatch)
+        _initial_ticker = _TICKER_HARDCODED.get(company_name, company_name)
+        info, hist, calendar = await asyncio.to_thread(_get_info, _initial_ticker)
 
         # 查不到時，用 Yahoo Finance search 解析真實 ticker
         if info is None:
@@ -226,6 +230,12 @@ async def fetch_yfinance(company_name: str) -> dict:
         result["longName"] = info.get("longName")
         result["price"] = info.get("currentPrice") or info.get("regularMarketPrice")
         result["market_cap"] = info.get("marketCap")
+        # Sanity check: market cap > $5T is suspicious (likely ADR/local currency mismatch)
+        _mcap = result["market_cap"]
+        if _mcap and _mcap > 5_000_000_000_000:
+            logger.warning(f"[yfinance] {company_name}: market_cap ${_mcap:,.0f} > $5T — possible ADR/currency mismatch, nullifying")
+            result["data_quality_flag"] = "market_cap_suspicious"
+            result["market_cap"] = None  # Nullify to prevent LLM from reporting wrong currency number
         result["sector"] = info.get("sector")
         result["industry"] = info.get("industry")
         result["employees"] = info.get("fullTimeEmployees")
