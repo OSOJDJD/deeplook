@@ -1,3 +1,11 @@
+# === NEVER COMMIT THESE ===
+# .env              — real API keys
+# .claude/          — local Claude Code config
+# .agents/          — local skills
+# skills-lock.json  — local lock file
+# *.md NOT in docs/ — stray report outputs
+# === END ===
+
 # Environment
 .env
 
@@ -50,3 +58,10 @@ deeplook/.claude/
 # Legacy prompt versions
 deeplook/judgment/prompt.py
 deeplook/judgment/prompt_v*.py
+
+# Local config
+.claude/settings.local.json
+skills-lock.json
+.agents/
+nvidia_report.md
+ARCHITECTURE.md
