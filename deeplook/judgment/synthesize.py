@@ -338,11 +338,14 @@ IMPORTANT for market_data.key_metrics:
 IMPORTANT for recent_signals:
 - Generate 5 to 8 signals ordered by date descending (most recent first).
 - alert_type = "critical" for: M&A activity, CEO/leadership changes, earnings miss >10%, major regulatory actions, significant lawsuits, going-concern warnings, or delisting risks. All other signals use alert_type = "normal".
+- If earnings surprise data is available and magnitude exceeds 20% (positive or negative), MUST extract both actual EPS and consensus estimate EPS. Format the signal as: "EPS $X.XX vs estimate $Y.YY (±Z% surprise)". Do not report only one figure.
 
 IMPORTANT for competitive_landscape.peer_tickers:
 - Add up to 3 ticker symbols of the most comparable publicly-traded competitors.
 - Use only real, active tickers. For private/crypto companies, use the closest public proxy (e.g. COIN for a crypto exchange, ABNB for a private travel startup).
 - If no comparable public peers exist, set peer_tickers = [].
+- For Layer 1 blockchains: peer_tickers MUST include ETH plus at least one other comparable L1 (e.g., AVAX, SUI, NEAR, or the most relevant competitor from the data). Never leave peer_tickers empty for L1 crypto entities.
+- For DeFi protocols: peer_tickers MUST include at least 2 comparable protocol proxies (e.g., AAVE, UNI, CRV, COMP). Never leave peer_tickers empty for DeFi entities.
 
 IMPORTANT for business segments:
 - If the fetched data contains segment-level breakdowns (e.g. from SEC filings, earnings call transcripts, news), extract 3-6 segments as an array:
@@ -363,6 +366,7 @@ JUDGE_SYSTEM = """You are a company phase assessment agent. You receive structur
 5. If len(missing_data) > 50% of total fact fields, add "low_confidence": true.
 6. You MUST reference every important quantitative figure from the facts in bull_case, bear_case, or risks. Do not omit any revenue, ARR, deal size, analyst target price, TVL, mcap/TVL ratio, or other numeric data present in the facts. If facts contain 10 numbers, your output must cite at least 8 of them across bull_case + bear_case + risks combined.
 7. bear_case MUST include at least one macro or geopolitical risk factor relevant to this company. Examples: tariffs, export controls, interest rate policy, commodity price risk, regulatory changes, geopolitical tensions. If no obvious macro risk applies, briefly state why the company is relatively insulated (e.g. "domestic-only revenue base insulates from tariff risk").
+8. If PEG ratio < 1.0 but your phase assessment suggests caution or deceleration, you MUST note this discrepancy in phase_reasoning. Explain why low PEG may be misleading (e.g., forward earnings estimates may be overly optimistic, or growth is expected to decelerate beyond the forecast period).
 
 ## Phase Definitions
 - EXPANDING: Active growth — revenue up, new markets, recent fundraising, strong positive catalysts
@@ -464,6 +468,10 @@ IMPORTANT for guidance: Extract forward guidance from earnings calls, press rele
 
 IMPORTANT for segments: Extract 3-6 business segment metrics from SEC filings, earnings transcripts, or news if available. If no segment data exists in the sources, set segments = [].
 
+IMPORTANT for defense/government contractors: Identify contract type when possible. IDIQ (Indefinite Delivery/Indefinite Quantity) contract ceilings represent maximum potential value, NOT guaranteed revenue. State this distinction clearly in one_line or bear_case when relevant. Do not treat a contract ceiling as confirmed backlog.
+
+IMPORTANT for private/pre-IPO companies: entry and exit criteria must include a liquidity caveat. Note that shares cannot be freely traded on public markets. Specify whether criteria apply to secondary market transactions, future IPO pricing, or are hypothetical benchmarks for monitoring only.
+
 REMINDER: Every claim must cite specific data. No generic statements. Return valid JSON only.
 """
 
@@ -480,6 +488,7 @@ VALIDATE_SYSTEM = """You are a verdict validation and refinement agent. You rece
 7. FORBIDDEN phrases — never output: "demands scrutiny", "mixed signals", "investors should monitor", "presents both opportunities and challenges", "warrants attention", "remains to be seen", "complex landscape".
 8. analysis_context: compute from provided data. Set any field to null if the data to compute it is absent.
 9. Before finalizing, verify all entry/exit conditions are logically and mathematically consistent. Specific checks: (a) If entry_price is below a stated support level (e.g. MA), the support is broken — do not say "while maintaining support above [higher price]". (b) If a per-unit cost is derived by division, verify numerator and denominator are from the same business segment. (c) If an event appears in signals as completed, it cannot also appear as an upcoming catalyst.
+10. Check signal timeline for contradictions: if an event is described as completed/launched in the timeline (recent_signals), it MUST NOT also appear as an upcoming catalyst (upcoming_catalysts). Flag and fix any such contradiction before finalizing output.
 
 ## Output (valid JSON only):
 {
@@ -716,8 +725,47 @@ def extract_facts(
         sections.append(data_str)
         sections.append("")
 
+    _SKIP_INSTRUCTIONS = {
+        "public_equity": (
+            "Skip these fields entirely (do not include in output):\n"
+            "- funding.total_raised, funding.last_round (not applicable for public companies)\n"
+            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
+            "- overview.team_size (rarely available, skip)\n"
+            "- valuation.ev_to_ebitda (skip if not available, do not output \"Insufficient data\")\n"
+            "Keep output focused on: financials, valuation REGIME_A, signals, peers."
+        ),
+        "crypto": (
+            "Skip these fields entirely (do not include in output):\n"
+            "- financials.earnings_growth, financials.fcf, financials.margin (not applicable for crypto)\n"
+            "- funding.last_round (omit unless explicitly known)\n"
+            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
+            "- segments (not applicable for crypto)\n"
+            "Keep output focused on: market_data.key_metrics (TVL, DAU, fees), signals, competitive_landscape."
+        ),
+        "private": (
+            "Skip these fields entirely (do not include in output):\n"
+            "- financials.earnings_growth, financials.fcf (not publicly available)\n"
+            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
+            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
+            "- price.change_30d (no public price)\n"
+            "- segments (rarely available)\n"
+            "Keep output focused on: funding, overview, signals, competitive_landscape, upcoming_catalysts."
+        ),
+        "private_or_unlisted": (
+            "Skip these fields entirely (do not include in output):\n"
+            "- financials.earnings_growth, financials.fcf (not publicly available)\n"
+            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
+            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
+            "- price.change_30d (no public price)\n"
+            "- segments (rarely available)\n"
+            "Keep output focused on: funding, overview, signals, competitive_landscape, upcoming_catalysts."
+        ),
+    }
+    skip_note = _SKIP_INSTRUCTIONS.get(entity_type, "")
+
     user_message = "\n".join(sections)
-    prompt = user_message + "\n\nRespond with valid JSON only. No markdown, no explanation."
+    skip_block = f"\n\n{skip_note}\n" if skip_note else ""
+    prompt = user_message + skip_block + "\nRespond with valid JSON only. No markdown, no explanation."
     log("extract_facts", "START", f"input_chars={len(user_message)}")
 
     result, model, tokens = _call_llm_with_retry(prompt, EXTRACT_SYSTEM, "extract", "extract_facts", temperature=0.2, max_tokens=4096)

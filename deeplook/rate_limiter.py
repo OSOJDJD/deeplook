@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 client_ip_var: ContextVar[str] = ContextVar("client_ip", default="unknown")
 
 # ── Config (env-overridable) ───────────────────────────────────────────────────
-DAILY_LOOKUP_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_LOOKUP_LIMIT", "5"))
-DAILY_RESEARCH_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_RESEARCH_LIMIT", "2"))
+DAILY_LOOKUP_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_LOOKUP_LIMIT", "20"))
+DAILY_RESEARCH_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_RESEARCH_LIMIT", "10"))
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
