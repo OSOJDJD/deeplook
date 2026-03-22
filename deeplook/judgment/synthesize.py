@@ -567,12 +567,13 @@ Bad hooks (too conclusory):
 Produce a short, evidence-based verdict from the provided data. This helps downstream LLMs (especially smaller models) that may not synthesize well from raw data alone. Stronger models will form their own judgment and may override this.
 
 Rules for verdict:
-- one_line: max 15 words, direct assessment with a number from the data
+- one_line: Maximum 15 words. Direct assessment with a number from the data.
 - stance: bullish / bearish / neutral — pick one, do not hedge
-- bull_case: ONE sentence, must contain a specific number from the financials/valuation data
-- bear_case: ONE sentence, must contain a specific number or named risk
+- bull_case: Maximum 35 words. ONE sentence.
+- bear_case: Maximum 35 words. ONE sentence.
 - wait_for: ONE specific upcoming event or catalyst from the data. If none exists, write "No confirmed catalyst in current data"
 - action: research_deeper / monitor / avoid / wait_for_catalyst
+Your output will be programmatically validated. Any field exceeding the word limit will be truncated.
   - revenue_growth > 20% AND positive signals → research_deeper
   - steady metrics, no dramatic change → monitor
   - major negative signals or data gaps → avoid or wait_for_catalyst
@@ -591,10 +592,10 @@ IMPORTANT: The verdict must be derived ONLY from the structured data provided (f
     "hook 3 — observation + question"
   ],
   "verdict": {
-    "one_line": "max 15 words, direct assessment with a number",
+    "one_line": "max 15 words",
     "stance": "bullish|bearish|neutral",
-    "bull_case": "ONE sentence with a specific number",
-    "bear_case": "ONE sentence with a specific number or named risk",
+    "bull_case": "max 35 words, ONE sentence",
+    "bear_case": "max 35 words, ONE sentence",
     "wait_for": "ONE specific upcoming event, or 'No confirmed catalyst in current data'",
     "action": "research_deeper|monitor|avoid|wait_for_catalyst",
     "confidence": "high|medium|low"
@@ -607,6 +608,37 @@ RULES:
 - If website/wiki text is empty or irrelevant, write overview as "No company description available from sources."
 - Do not add information not present in the provided data.
 - Return valid JSON only. No markdown, no explanation."""
+
+
+def _enforce_word_limits(verdict: dict) -> dict:
+    """Truncate verdict fields that exceed word limits, cutting at the nearest punctuation."""
+    limits = {
+        "one_line": 20,
+        "bull_case": 40,
+        "bear_case": 40,
+        "wait_for": 30,
+    }
+    for field, max_words in limits.items():
+        text = verdict.get(field, "")
+        if not text:
+            continue
+        # wait_for: strip everything after the first semicolon
+        if field == "wait_for" and ";" in text:
+            text = text[:text.index(";")].strip()
+            verdict[field] = text
+        words = text.split()
+        if len(words) <= max_words:
+            continue
+        truncated = " ".join(words[:max_words])
+        # walk back to nearest sentence-ending punctuation
+        for i in range(len(truncated) - 1, -1, -1):
+            if truncated[i] in ".;,":
+                truncated = truncated[:i + 1]
+                break
+        else:
+            truncated = truncated + "."
+        verdict[field] = truncated
+    return verdict
 
 
 async def compress_context(structured_data: dict) -> dict:
@@ -647,7 +679,7 @@ async def compress_context(structured_data: dict) -> dict:
             "overview": result.get("overview", ""),
             "news_bullets": result.get("news_bullets", []),
             "analysis_hooks": result.get("analysis_hooks", []),
-            "verdict": result.get("verdict", {}),
+            "verdict": _enforce_word_limits(result.get("verdict", {})),
             "_model": model,
             "_tokens": tokens,
         }
@@ -1086,6 +1118,7 @@ def synthesize(
     except Exception as e:
         log("synthesize", "VALIDATE_FAIL", str(e))
         print(f"[synthesize] validate_verdict failed: {e} — using original verdict")
+    verdict = _enforce_word_limits(verdict)
     _timing_validate = round(time.time() - _t4, 2)
 
     result = _assemble(
