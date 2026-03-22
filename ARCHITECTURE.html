@@ -1,0 +1,640 @@
+<html><body><h1>DeepLook Architecture — Decision Cheat Sheet</h1>
+<blockquote>
+<p>Generated 2026-03-20. Based on NVIDIA (public_equity) benchmark runs.
+This file is gitignored — local reference only.</p>
+</blockquote>
+<hr />
+<h2>Section 1: Complete Data Flow</h2>
+<p><code>USER INPUT: "NVIDIA"
+      │
+      ▼  3.7s
+┌─────────────────────────────────────────────────────────┐
+│  ENTITY ROUTING  (research.py: detect_company_type)     │
+│  Model: claude-haiku (implicit via LLM detect)          │
+│  Logic: yfinance ticker check → coingecko → rootdata    │
+│         → fallback to private_or_unlisted               │
+│  Output: entity_type="public_equity", ticker="NVDA"     │
+└─────────────────────────────────────────────────────────┘
+      │
+      ▼  8.97s wall (parallel)
+┌─────────────────────────────────────────────────────────┐
+│  ROUND 1 FETCHERS  (all parallel via asyncio.gather)    │
+│  public_equity active set:                              │
+│    website      → 0.0s  (fast-fail / bot-blocked)       │
+│    wikipedia    → 0.0s  (fast)                          │
+│    yfinance     → 0.0s  (fast, cached locally)          │
+│    yfinance_news→ 0.0s  (fast, merged into news)        │
+│    sec_edgar    → 8.97s ← BOTTLENECK (SEC EDGAR API)    │
+│    finnhub      → 2.6s  (hidden under sec_edgar)        │
+│  Output: fetcher_results dict, each value =             │
+│    {"status": "ok", "data": {...}}                      │
+└─────────────────────────────────────────────────────────┘
+      │
+      ▼  1.91s
+┌─────────────────────────────────────────────────────────┐
+│  ROUND 1.5: QUERY GENERATION  (synthesize.py)           │
+│  Model: Haiku  │  Tokens: ~3,381 total                  │
+│  Input: R1 data truncated to 1500 chars/source          │
+│  Output: {youtube_queries: [...], news_queries: [...]}  │
+│  Purpose: context-aware queries for R2 fetchers         │
+└─────────────────────────────────────────────────────────┘
+      │
+      ▼  3.58s wall (parallel)
+┌─────────────────────────────────────────────────────────┐
+│  ROUND 2 FETCHERS  (parallel via asyncio.gather)        │
+│    news         → 0.0s  (fast)                          │
+│    youtube      → 3.58s ← BOTTLENECK (transcript fetch) │
+│  Post-R2 inject (public_equity only, instant):          │
+│    peer_comparison  ← fetch_peer_data([AMD,INTC,AVGO])  │
+│    technical_snapshot ← computed from yfinance data     │
+│    earnings_calendar  ← from yfinance.calendar          │
+│  Merge: yfinance_news → news (dedup + rank)             │
+│  Output: fetcher_results (10-12 sources), filter        │
+│          rejected results → judgment_results            │
+└─────────────────────────────────────────────────────────┘
+      │
+      │  judgment_results passed to synthesize()
+      ▼  22.77s
+┌─────────────────────────────────────────────────────────┐
+│  CALL 1: EXTRACT  (synthesize.py: extract_facts)        │
+│  Model: Haiku  │  Tokens: ~13,280 total                 │
+│  Input: ~20,280 chars (≈5,070 tokens)                   │
+│    Each source truncated to 4,000 chars head-only       │
+│    + entity-type skip instructions appended             │
+│  Output: structured facts JSON, ~9,743 chars            │
+│    (≈2,400 output tokens)                               │
+│  Est. cost: ~$0.018                                     │
+│    input: 10,880 × $0.80/1M = $0.0087                   │
+│    output:  2,400 × $4.00/1M = $0.0096                  │
+└─────────────────────────────────────────────────────────┘
+      │ facts dict (full extract output)
+      │   judge receives SUBSET:
+      │   company_name, entity_type, price, financials,
+      │   signals, upcoming_events, competitors, missing_data
+      ▼  13.82s
+┌─────────────────────────────────────────────────────────┐
+│  CALL 2: JUDGE  (synthesize.py: judge)                  │
+│  Model: Sonnet  │  Tokens: ~2,752 total                 │
+│  Input: ~2,658 chars (≈665 tokens) — facts subset       │
+│  Output: phase, momentum, bull/bear case, risks         │
+│    ~2,183 chars (≈546 output tokens)                    │
+│  Est. cost: ~$0.015                                     │
+│    input:  2,206 × $3.00/1M = $0.0066                   │
+│    output:   546 × $15.00/1M = $0.0082                  │
+└─────────────────────────────────────────────────────────┘
+      │ judgment dict + facts subset:
+      │   company_name, price, financials, signals,
+      │   upcoming_events, missing_data (NO valuation/peers)
+      ▼  3.59s
+┌─────────────────────────────────────────────────────────┐
+│  CALL 3: ACT  (synthesize.py: recommend_action)         │
+│  Model: Haiku  │  Tokens: ~2,935 total                  │
+│  Input: ~4,963 chars (≈1,241 tokens)                    │
+│  Output: one_line, action, wait_for, confidence,        │
+│    bull/bear, guidance, segments                        │
+│    ~1,117 chars (≈279 output tokens)                    │
+│  Est. cost: ~$0.003                                     │
+│    input:  2,656 × $0.80/1M = $0.0021                   │
+│    output:   279 × $4.00/1M = $0.0011                   │
+└─────────────────────────────────────────────────────────┘
+      │ verdict + judgment subset + facts subset:
+      │   price, financials, valuation, competitive_landscape,
+      │   recent_signals[:5]
+      ▼  13.49s
+┌─────────────────────────────────────────────────────────┐
+│  CALL 4: VALIDATE  (synthesize.py: validate_verdict)    │
+│  Model: Sonnet  │  Tokens: ~3,614 total                 │
+│  Input: ~7,084 chars (≈1,771 tokens)                    │
+│  Output: stance, entry_trigger, risk_trigger,           │
+│    peer_context, analysis_context, sharpened one_line   │
+│    ~1,735 chars (≈434 output tokens)                    │
+│  Est. cost: ~$0.016                                     │
+│    input:  3,180 × $3.00/1M = $0.0095                   │
+│    output:   434 × $15.00/1M = $0.0065                  │
+└─────────────────────────────────────────────────────────┘
+      │ _assemble() merges all outputs
+      ▼
+┌─────────────────────────────────────────────────────────┐
+│  FORMATTER  (formatter.py)                              │
+│  format_report() → stdout (human-readable)              │
+│  format_layer1() → structured JSON (MCP/API consumers)  │
+│  No LLM calls. Pure Python dict traversal.              │
+└─────────────────────────────────────────────────────────┘
+      │
+      ▼
+FINAL OUTPUT: formatted report + JSON
+Total wall: ~73s  │  Total LLM cost: ~$0.055</code></p>
+<hr />
+<h2>Section 2: File Responsibilities</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>職責</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>__main__.py</code></td>
+<td>CLI entry point，解析參數，呼叫 <code>run_research()</code></td>
+</tr>
+<tr>
+<td><code>research.py</code></td>
+<td>主 orchestrator：entity routing → fetchers R1/R2 → peer/tech inject → synthesize → format</td>
+</tr>
+<tr>
+<td><code>formatter.py</code></td>
+<td>把 research result dict 轉成 human-readable stdout 和 structured JSON (Layer 1 format)</td>
+</tr>
+<tr>
+<td><code>debug_log.py</code></td>
+<td>簡單 timestamped logger，寫到 stdout，格式 <code>[timestamp] [fn] EVENT \| detail</code></td>
+</tr>
+<tr>
+<td><code>rate_limiter.py</code></td>
+<td>Per-IP rate limiting（lookup: 20/day, research: 10/day），用於 MCP server</td>
+</tr>
+<tr>
+<td><code>mcp_server.py</code></td>
+<td>MCP server，暴露 <code>deeplook_lookup</code> 和 <code>deeplook_research</code> 兩個 tool 給 Claude</td>
+</tr>
+<tr>
+<td><code>judgment/synthesize.py</code></td>
+<td>四階段 LLM pipeline（extract→judge→act→validate）+ prompt 定義 + LLM caller</td>
+</tr>
+<tr>
+<td><code>fetchers/search_strategy.py</code></td>
+<td>各 entity type 的 fetcher 啟用表、時間限制、fetcher limits、news dedup/rank、result 驗證</td>
+</tr>
+<tr>
+<td><code>fetchers/yfinance_data.py</code></td>
+<td>yfinance 封裝：股價、財務、技術指標、ticker 解析、peer data fetch</td>
+</tr>
+<tr>
+<td><code>fetchers/sec_edgar.py</code></td>
+<td>SEC EDGAR API：最新 10-K/10-Q filing 的 text 段落</td>
+</tr>
+<tr>
+<td><code>fetchers/finnhub_fetcher.py</code></td>
+<td>Finnhub API：earnings surprise、EPS 歷史、基本面</td>
+</tr>
+<tr>
+<td><code>fetchers/news.py</code></td>
+<td>新聞搜尋（多個 provider），按相關性和時效篩選，回傳 articles list</td>
+</tr>
+<tr>
+<td><code>fetchers/youtube.py</code></td>
+<td>YouTube 搜尋 + transcript 抓取，取最近 N 部影片</td>
+</tr>
+<tr>
+<td><code>fetchers/wikipedia.py</code></td>
+<td>Wikipedia API：公司基本資料 summary</td>
+</tr>
+<tr>
+<td><code>fetchers/website.py</code></td>
+<td>爬公司官網，抓 IR/about 頁面文字</td>
+</tr>
+<tr>
+<td><code>fetchers/coingecko.py</code></td>
+<td>CoinGecko API：token 價格、市值、FDV、24h volume</td>
+</tr>
+<tr>
+<td><code>fetchers/defillama.py</code></td>
+<td>DeFiLlama API：TVL、protocol fees、chain metrics</td>
+</tr>
+<tr>
+<td><code>fetchers/rootdata.py</code></td>
+<td>RootData API：私人項目融資資料（主要覆蓋 Web3）</td>
+</tr>
+<tr>
+<td><code>fetchers/cache.py</code></td>
+<td>Fetcher 結果快取（eval/optimize 用），避免重複 API call</td>
+</tr>
+<tr>
+<td><code>fetchers/utils.py</code></td>
+<td>共用 helper：HTTP client、重試邏輯等</td>
+</tr>
+<tr>
+<td><code>eval/eval.py</code></td>
+<td>評估 pipeline：對比不同 prompt 版本的輸出品質</td>
+</tr>
+<tr>
+<td><code>eval/batch_runner.py</code></td>
+<td>批次跑多間公司，收集結果做比較</td>
+</tr>
+<tr>
+<td><code>eval/optimize.py</code></td>
+<td>用 cached fetcher data 重跑 synthesize，測試 prompt 改動效果</td>
+</tr>
+<tr>
+<td><code>eval/clear_bad_cache.py</code></td>
+<td>清除無效的 cache 記錄</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Section 3: Token Budget Breakdown (NVIDIA benchmark)</h2>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Model</th>
+<th>Input Tokens</th>
+<th>Output Tokens</th>
+<th>Total Tokens</th>
+<th>Time</th>
+<th>Est. Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Query Gen (R1.5)</td>
+<td>Haiku</td>
+<td>~3,281</td>
+<td>~100</td>
+<td>3,381</td>
+<td>1.9s</td>
+<td>$0.003</td>
+</tr>
+<tr>
+<td><strong>Extract (Call 1)</strong></td>
+<td><strong>Haiku</strong></td>
+<td><strong>~10,880</strong></td>
+<td><strong>~2,400</strong></td>
+<td><strong>13,280</strong></td>
+<td><strong>22.8s</strong></td>
+<td><strong>$0.018</strong></td>
+</tr>
+<tr>
+<td>Judge (Call 2)</td>
+<td>Sonnet</td>
+<td>~2,206</td>
+<td>~546</td>
+<td>2,752</td>
+<td>13.8s</td>
+<td>$0.015</td>
+</tr>
+<tr>
+<td>Act (Call 3)</td>
+<td>Haiku</td>
+<td>~2,656</td>
+<td>~279</td>
+<td>2,935</td>
+<td>3.6s</td>
+<td>$0.003</td>
+</tr>
+<tr>
+<td>Validate (Call 4)</td>
+<td>Sonnet</td>
+<td>~3,180</td>
+<td>~434</td>
+<td>3,614</td>
+<td>13.5s</td>
+<td>$0.016</td>
+</tr>
+<tr>
+<td><strong>TOTAL</strong></td>
+<td></td>
+<td><strong>~22,203</strong></td>
+<td><strong>~3,759</strong></td>
+<td><strong>~25,962</strong></td>
+<td><strong>55.6s LLM</strong></td>
+<td><strong>~$0.055</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Pricing used: Haiku $0.80/$4.00 per 1M tokens (in/out), Sonnet $3.00/$15.00 per 1M tokens.</p>
+<p>Non-LLM time: entity routing 3.7s + fetchers R1 9.0s + fetchers R2 3.6s = 16.3s
+<strong>Total wall: ~73s</strong></p>
+<hr />
+<h2>Section 4: Fixed Cost vs Variable Cost</h2>
+<h3>Fixed (runs every time regardless of entity type)</h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Time</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Entity routing</td>
+<td>~3.7s</td>
+<td>Always runs, determines everything downstream</td>
+</tr>
+<tr>
+<td>wikipedia fetcher</td>
+<td>~0s</td>
+<td>Active for all except defunct</td>
+</tr>
+<tr>
+<td>news fetcher (R2)</td>
+<td>~0s</td>
+<td>Active for all entity types</td>
+</tr>
+<tr>
+<td>Query generation LLM</td>
+<td>~1.9s</td>
+<td>Always runs between R1 and R2</td>
+</tr>
+<tr>
+<td>Extract LLM (Call 1)</td>
+<td>~22s</td>
+<td>Always runs</td>
+</tr>
+<tr>
+<td>Judge LLM (Call 2)</td>
+<td>~14s</td>
+<td>Always runs</td>
+</tr>
+<tr>
+<td>Act LLM (Call 3)</td>
+<td>~4s</td>
+<td>Always runs</td>
+</tr>
+<tr>
+<td>Validate LLM (Call 4)</td>
+<td>~13s</td>
+<td>Always runs</td>
+</tr>
+<tr>
+<td>Formatter</td>
+<td>&lt;0.1s</td>
+<td>Always runs</td>
+</tr>
+</tbody>
+</table>
+<h3>Variable (depends on entity type)</h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Active For</th>
+<th>Time</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>yfinance + yfinance_news</td>
+<td>public_equity only</td>
+<td>~0s</td>
+<td>Fast when active</td>
+</tr>
+<tr>
+<td>sec_edgar</td>
+<td>public_equity only</td>
+<td>~9s</td>
+<td><strong>Biggest variable cost</strong></td>
+</tr>
+<tr>
+<td>finnhub</td>
+<td>public_equity only</td>
+<td>~2.6s</td>
+<td>Hidden under sec_edgar parallelism</td>
+</tr>
+<tr>
+<td>peer_comparison</td>
+<td>public_equity only</td>
+<td>&lt;0.5s</td>
+<td>Computed from yfinance data</td>
+</tr>
+<tr>
+<td>technical_snapshot</td>
+<td>public_equity only</td>
+<td>&lt;0.1s</td>
+<td>Computed from yfinance data</td>
+</tr>
+<tr>
+<td>earnings_calendar</td>
+<td>public_equity only</td>
+<td>&lt;0.1s</td>
+<td>From yfinance.calendar</td>
+</tr>
+<tr>
+<td>coingecko</td>
+<td>crypto, exchange, foundation</td>
+<td>varies</td>
+<td>—</td>
+</tr>
+<tr>
+<td>defillama</td>
+<td>crypto, foundation</td>
+<td>varies</td>
+<td>—</td>
+</tr>
+<tr>
+<td>rootdata</td>
+<td>crypto, private, private_or_unlisted, VC, foundation</td>
+<td>varies</td>
+<td>Coverage weak for non-Web3</td>
+</tr>
+<tr>
+<td>youtube</td>
+<td>all except defunct</td>
+<td>~3.6s</td>
+<td>Often the R2 bottleneck</td>
+</tr>
+<tr>
+<td>website</td>
+<td>all except defunct</td>
+<td>~0s</td>
+<td>Almost always fast-fails</td>
+</tr>
+<tr>
+<td>entity-type skip instructions</td>
+<td>PE / crypto / private</td>
+<td>0s</td>
+<td>Just appended text, no extra LLM call</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Section 5: Bottleneck Ranking</h2>
+<table>
+<thead>
+<tr>
+<th>Rank</th>
+<th>Component</th>
+<th>Time</th>
+<th>Type</th>
+<th>Fix Direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Extract LLM</strong></td>
+<td>~22s</td>
+<td>Compute-bound (output generation)</td>
+<td>Shrink output schema further; already done entity-type skip; Haiku max output is ~2,400 tokens — near floor</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Judge LLM</strong></td>
+<td>~14s</td>
+<td>Compute-bound (Sonnet TTFT + generation)</td>
+<td>Merge judge+act into single Sonnet call (saves ~4s), or accept as Sonnet floor</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Validate LLM</strong></td>
+<td>~13s</td>
+<td>Compute-bound (Sonnet)</td>
+<td>Most controversial: costs 13s, adds stance/triggers/peer_context. Worth it only if validate catches real errors</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>sec_edgar fetcher</strong></td>
+<td>~9s</td>
+<td>I/O bound (SEC EDGAR API latency)</td>
+<td>Reduce timeout; limit to most recent 1 filing; already parallel so doesn't block much</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>youtube fetcher</strong></td>
+<td>~3.6s</td>
+<td>I/O bound (transcript fetch)</td>
+<td><code>--no-youtube</code> flag exists; transcript data has low density per token</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Act LLM</strong></td>
+<td>~3.6s</td>
+<td>Compute-bound (Haiku, fast)</td>
+<td>Already Haiku, low priority</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>Entity routing</strong></td>
+<td>~3.7s</td>
+<td>I/O bound (yfinance ticker check)</td>
+<td>Could cache known tickers; minor impact</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>API latency variance</strong></td>
+<td>±15s</td>
+<td>Uncontrollable</td>
+<td>Sonnet calls vary 8–21s depending on load. Accept.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key insight</strong>: LLM output generation (not input processing) dominates. Cutting input tokens has minimal effect on wall time.</p>
+<hr />
+<h2>Section 6: Decision Cheat Sheet</h2>
+<h3>Entity Routing</h3>
+<ul>
+<li>這個 entity type 分類對嗎？NVIDIA → public_equity 正確嗎？（看 <code>[pipeline]</code> log 確認 ticker 解析）</li>
+<li>有沒有誤判的 edge case？例如 exchange 上市的 crypto 公司（Coinbase → 應該是 public_equity，不是 exchange）</li>
+<li>DISAMBIGUATION 表裡有沒有缺漏的常見誤判？（Solana、TON 等已有，其他 L2/DeFi 有嗎？）</li>
+<li>有沒有新的 entity type 值得加？（例如 REIT、ETF、commodity）</li>
+</ul>
+<h3>Fetcher 環節</h3>
+<ul>
+<li>這個 fetcher 對這個 entity type 有沒有產出有用的 data？（看 <code>[strategy] active fetchers</code> log + 看 extract input 裡那個 source 有多少內容）</li>
+<li>如果砍掉這個 fetcher，report 品質會變差嗎？（website 幾乎永遠 fast-fail → 可考慮對 public_equity 禁用）</li>
+<li>這個 fetcher 的耗時 vs 它提供的價值，ROI 合理嗎？（youtube 3.6s 但 transcript 只給 1500 chars → 邊際低）</li>
+<li>sec_edgar 抓到的內容有多少進入最終 report？（截斷在 4000 chars，實際 filing 幾十頁）</li>
+<li>rootdata 對非 Web3 private 公司（如 Anduril）覆蓋率接近 0 — 有更好的替代？</li>
+</ul>
+<h3>Extract 環節</h3>
+<ul>
+<li>Input 裡最肥的 source 是哪個？（<code>input_chars</code> log — 通常是 news 或 sec_edgar）</li>
+<li>Output schema 裡哪些 field 對這個 entity type 是廢的？（已加 entity-type skip 指令，但有沒有還沒跳過的？）</li>
+<li>Haiku 夠用嗎？目前看 NVIDIA/Solana 品質 OK；edge case 是資料量小但概念複雜的 private 公司</li>
+<li>Temperature 0.2 合理嗎？同一間公司跑兩次，<code>signals</code> 順序/措辭應該一致</li>
+<li>4000 chars head-only truncation 對 news articles 是最糟的（尾部是最新文章）— 已知問題，head+tail 試過速度未改善</li>
+</ul>
+<h3>Judge 環節</h3>
+<ul>
+<li>傳給 judge 的 facts 子集夠嗎？目前缺 <code>valuation</code>、<code>competitive_landscape</code> — judge 無法看到 P/E 或 peer multiples</li>
+<li>Bull/bear case 有沒有提到最重要的 catalyst 和 risk？（看 phase_reasoning 是否引用了 facts 裡的具體數字）</li>
+<li>Phase 判斷跟最近的 signals 一致嗎？如果 signals 全負面但 phase = EXPANDING，validate 應該要 flag</li>
+<li>Macro risk 有沒有出現？（Rule 7 要求 bear_case 包含 macro/geopolitical risk — 對 NVIDIA 應提 export controls）</li>
+<li>Missing data list 超過 50% → <code>low_confidence: true</code> → act 的 confidence 自動降為 medium/low</li>
+</ul>
+<h3>Act 環節</h3>
+<ul>
+<li>Entry/exit trigger 有具體數字嗎？（看 <code>entry_trigger</code> 欄位，不能只寫 "when revenue improves"）</li>
+<li>Haiku 做 act 品質夠嗎？act 的 input 已包含 judgment 的 bull/bear/risks，Haiku 只是格式化 → 目前 OK</li>
+<li>Wait_for 合理嗎？TIER A 優先用 upcoming_events；如果又寫了 "No confirmed catalyst" 需要問為什麼 upcoming_events 是空的</li>
+<li>Guidance 和 segments 有沒有正確從 SEC/earnings 資料裡提取出來？</li>
+</ul>
+<h3>Validate 環節</h3>
+<ul>
+<li>Validate 有沒有抓到 judge/act 的邏輯錯誤？（看 <code>narrative_gap</code> 欄位 — 如果是 null 表示沒發現矛盾）</li>
+<li>有沒有放過明顯的矛盾？（Rule 9/10：completed events 不能出現在 upcoming_catalysts；entry price 不能高於說的 support level）</li>
+<li>Validate 加的 13 秒值得嗎？它主要加了 <code>stance</code>、<code>entry_trigger</code>、<code>risk_trigger</code>、<code>peer_context</code> — 這四個欄位 act 無法可靠生成</li>
+<li>如果 validate 發現問題，現在是 patch（改寫 output）還是 reject + retry？→ 目前是 patch，沒有 retry 機制</li>
+</ul>
+<h3>Output / Formatter 環節</h3>
+<ul>
+<li>最終 report 對用戶來說可讀嗎？關鍵資訊（verdict、stance、entry/risk trigger）在最後面，用戶要捲很久才看到</li>
+<li>Structured JSON (Layer 1) 對 AI agent 夠用嗎？MCP consumer 能取得所有欄位？</li>
+<li><code>so_what</code> 欄位（"Watch: specific indicator"）有沒有真的可 actionable？</li>
+</ul>
+<h3>成本 &amp; 速度</h3>
+<ul>
+<li>這份 report 的 total cost 合理嗎？NVIDIA ≈ $0.055/run，目標 &lt;$0.05 → 略超，主要是兩個 Sonnet calls（judge + validate）</li>
+<li>60-70 秒的等待用戶能接受嗎？MCP server 是 async，Claude 在等的時候可以做別的事</li>
+<li>哪個 stage 如果砍掉，省的時間 vs 失去的品質：</li>
+<li><strong>砍 validate（-13s）</strong>：失去 stance、entry/risk trigger、peer_context、consistency check — 代價高</li>
+<li><strong>合併 judge+act（-4s）</strong>：低風險，這兩步 input 差不多，合一個 Sonnet call 可省 1 次 API round-trip</li>
+<li><strong>砍 youtube（-3.6s）</strong>：低代價，--no-youtube flag 已存在，transcript 資訊密度低</li>
+<li><strong>砍 website（-0s）</strong>：幾乎免費，但目前就是 0s 所以沒差</li>
+</ul>
+<hr />
+<h2>What NOT to Optimize (已踩過的坑)</h2>
+<h3>❌ Prompt Caching (cache_control: ephemeral)</h3>
+<p><strong>試過</strong>: 在 get_llm_response() 的 Anthropic path 加 cache_control 標記 system prompt
+<strong>結果</strong>: Run 1 vs Run 2 時間無差異（78s vs 84s）
+<strong>原因</strong>: 瓶頸是 output generation，不是 input token 處理。cache 只省 input 處理時間，對生成速度無效。
+<strong>結論</strong>: 不值得加複雜度。如果未來換成 extended thinking 或 batch API 另當別論。</p>
+<h3>❌ Input Token Pruning (prune_context / tiered truncation)</h3>
+<p><strong>試過</strong>:
+1. <code>prune_context()</code> — per-source 2000 token cap，head+tail truncation，總量 30k token 上限，tier-based source dropping
+2. Tiered truncation in extract_facts — tier1=3000 chars, tier2=2000 chars, tier3=1500 chars</p>
+<p><strong>結果</strong>: 兩者都讓 extract 更慢或觸發 JSON parse error（max_tokens=4096 不夠裝完整 output）
+<strong>原因</strong>: Extract input 從 40k chars 砍到 11k chars，但 extract 時間從 23s → 27s（更慢）。確認了 input size 對速度無效，output size 才是瓶頸。
+<strong>結論</strong>: 不要動 input truncation。現有 4000 chars head-only truncation 夠用。</p>
+<h3>❌ CRITICAL rules block at prompt top</h3>
+<p><strong>試過</strong>: 在 EXTRACT/JUDGE/ACT/VALIDATE system prompt 最前面加 6-line CRITICAL block
+<strong>結果</strong>: System prompt 變大 → input tokens 增加 → 對速度無正面影響，且測試發現 extract 從 23s → 32s
+<strong>結論</strong>: 重要規則留在 body 就好。頂部加 3 條以上的 block 會讓 prompt 過重。</p>
+<h3>⚠️ 目前不值得動的地方</h3>
+<table>
+<thead>
+<tr>
+<th>地方</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>judge()</code> 的 facts 子集選擇</td>
+<td>目前缺 valuation/peers，但加了會讓 input 變大，且 Sonnet 本來就能從 bull/bear 間接推斷</td>
+</tr>
+<tr>
+<td>extract 的 temperature=0.2</td>
+<td>試過 0.0 和 0.3，差異不明顯。0.2 是合理的中間值</td>
+</tr>
+<tr>
+<td>Sonnet for judge/validate</td>
+<td>試過讓 act 也用 Sonnet（目前 Haiku），速度沒顯著差異且 Haiku act 品質 OK</td>
+</tr>
+<tr>
+<td>entity routing LLM model</td>
+<td>路由本身用的不是 LLM，是規則 + yfinance/coingecko API check，3.7s 主要是 API 等待</td>
+</tr>
+<tr>
+<td>news dedup + rank</td>
+<td>已有 Layer 6/7 處理，目前 news 品質 OK，不是 bottleneck</td>
+</tr>
+<tr>
+<td>```</td>
+<td></td>
+</tr>
+</tbody>
+</table></body></html>

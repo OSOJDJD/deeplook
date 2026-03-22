@@ -646,6 +646,294 @@ def _build_technical_snapshot(yf_data: dict) -> dict | None:
         return None
 
 
+# ── v2 Code Processing Layer ───────────────────────────────────────────────
+
+def _truncate(text: str, max_chars: int) -> str:
+    if not text:
+        return ""
+    return str(text)[:max_chars]
+
+
+def _safe_float(val) -> float | None:
+    try:
+        if val is None:
+            return None
+        return float(str(val).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_pct(val) -> str | None:
+    try:
+        if val is None:
+            return None
+        f = float(val)
+        sign = "+" if f >= 0 else ""
+        return f"{sign}{f * 100:.1f}%"
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_currency(val) -> str | None:
+    try:
+        if val is None:
+            return None
+        v = float(val)
+        if v >= 1e12:
+            return f"${v / 1e12:.1f}T"
+        elif v >= 1e9:
+            return f"${v / 1e9:.1f}B"
+        elif v >= 1e6:
+            return f"${v / 1e6:.1f}M"
+        else:
+            return f"${v:,.0f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_price(r1_data: dict, entity_type: str) -> dict:
+    try:
+        if entity_type == "public_equity":
+            yfd = (r1_data.get("yfinance") or {}).get("data") or {}
+            current = _safe_float(yfd.get("current_price") or yfd.get("regularMarketPrice") or yfd.get("price"))
+            market_cap = yfd.get("market_cap") or yfd.get("marketCap")
+            return {
+                "current": current,
+                "change_30d": _format_pct(yfd.get("52WeekChange")),
+                "market_cap": _format_currency(market_cap),
+                "currency": yfd.get("currency", "USD"),
+            }
+        elif entity_type == "crypto":
+            cg = (r1_data.get("coingecko") or {}).get("data") or {}
+            market_data = cg.get("market_data") or {}
+            current = _safe_float(
+                (market_data.get("current_price") or {}).get("usd") or cg.get("current_price")
+            )
+            market_cap = _safe_float(
+                (market_data.get("market_cap") or {}).get("usd") or cg.get("market_cap")
+            )
+            change_30d = _safe_float(
+                market_data.get("price_change_percentage_30d")
+                or (cg.get("price_change_percentage_30d_in_currency") or {}).get("usd")
+            )
+            pct_str = f"{'+' if (change_30d or 0) >= 0 else ''}{change_30d:.1f}%" if change_30d is not None else None
+            return {"current": current, "change_30d": pct_str, "market_cap": _format_currency(market_cap), "currency": "USD"}
+    except Exception as e:
+        print(f"[v2] _extract_price failed: {e}")
+    return {"current": None, "change_30d": None, "market_cap": None, "currency": "USD"}
+
+
+def _extract_financials(r1_data: dict, entity_type: str) -> dict:
+    try:
+        if entity_type == "public_equity":
+            yfd = (r1_data.get("yfinance") or {}).get("data") or {}
+            return {
+                "revenue_growth": _format_pct(yfd.get("revenue_growth") or yfd.get("revenueGrowth")),
+                "earnings_growth": _format_pct(yfd.get("earnings_growth") or yfd.get("earningsGrowth")),
+                "gross_margin": _safe_float(yfd.get("grossMargins")),
+                "operating_margin": _safe_float(yfd.get("operating_margins") or yfd.get("operatingMargins")),
+                "fcf": _format_currency(yfd.get("free_cashflow") or yfd.get("freeCashflow")),
+                "revenue_ttm": _safe_float(yfd.get("total_revenue") or yfd.get("totalRevenue")),
+            }
+        elif entity_type == "crypto":
+            dl = (r1_data.get("defillama") or {}).get("data") or {}
+            cg = (r1_data.get("coingecko") or {}).get("data") or {}
+            tvl = dl.get("tvl") or ((cg.get("market_data") or {}).get("total_value_locked") or {}).get("usd")
+            return {"tvl": _format_currency(tvl)}
+    except Exception as e:
+        print(f"[v2] _extract_financials failed: {e}")
+    return {}
+
+
+def _extract_valuation(r1_data: dict, entity_type: str) -> dict:
+    try:
+        if entity_type == "public_equity":
+            yfd = (r1_data.get("yfinance") or {}).get("data") or {}
+            return {
+                "pe_ratio": _safe_float(yfd.get("trailingPE")),
+                "peg_ratio": _safe_float(yfd.get("peg_ratio") or yfd.get("pegRatio")),
+                "ps_ratio": _safe_float(yfd.get("priceToSalesTrailing12Months")),
+                "ev_to_ebitda": _safe_float(yfd.get("enterprise_to_ebitda") or yfd.get("enterpriseToEbitda")),
+                "analyst_target": _safe_float(yfd.get("target_mean_price") or yfd.get("targetMeanPrice")),
+            }
+        elif entity_type == "crypto":
+            cg = (r1_data.get("coingecko") or {}).get("data") or {}
+            dl = (r1_data.get("defillama") or {}).get("data") or {}
+            market_data = cg.get("market_data") or {}
+            fdv = (market_data.get("fully_diluted_valuation") or {}).get("usd")
+            mcap = _safe_float((market_data.get("market_cap") or {}).get("usd") or cg.get("market_cap"))
+            tvl = _safe_float(dl.get("tvl"))
+            mcap_to_tvl = round(mcap / tvl, 2) if mcap and tvl else None
+            return {"fdv": _format_currency(fdv), "mcap_to_tvl": mcap_to_tvl}
+    except Exception as e:
+        print(f"[v2] _extract_valuation failed: {e}")
+    return {}
+
+
+def _format_technical_snapshot_v2(technical: dict | None) -> dict:
+    if not technical:
+        return {}
+    try:
+        rsi = _safe_float(technical.get("rsi14"))
+        price = _safe_float(technical.get("price"))
+        ma50 = _safe_float(technical.get("50d_ma"))
+        ma200 = _safe_float(technical.get("200d_ma"))
+        signals = []
+        if rsi is not None:
+            if rsi > 70:
+                signals.append("overbought")
+            elif rsi < 30:
+                signals.append("oversold")
+        if price is not None and ma50 is not None and ma200 is not None:
+            if price < ma50 and price < ma200:
+                signals.append("below_both_ma")
+            elif price > ma50 and price > ma200:
+                signals.append("above_both_ma")
+        if ma50 is not None and ma200 is not None:
+            signals.append("golden_cross" if ma50 > ma200 else "death_cross")
+        return {
+            "rsi_14": rsi,
+            "ma_50d": ma50,
+            "ma_200d": ma200,
+            "52w_high": _safe_float(technical.get("52w_high")),
+            "52w_low": _safe_float(technical.get("52w_low")),
+            "pct_from_high": _safe_float(technical.get("pct_from_high")),
+            "signals": signals,
+        }
+    except Exception as e:
+        print(f"[v2] _format_technical_snapshot_v2 failed: {e}")
+    return {}
+
+
+def _format_peer_table(peer_data: list) -> list:
+    result = []
+    for p in (peer_data or []):
+        try:
+            result.append({
+                "ticker": p.get("ticker"),
+                "name": p.get("name"),
+                "price": _safe_float(p.get("price")),
+                "market_cap": _safe_float(p.get("market_cap")),
+                "pe": _safe_float(p.get("trailingPE")),
+                "ps": _safe_float(p.get("priceToSalesTrailing12Months")),
+                "rev_growth_pct": _safe_float(p.get("revenueGrowth")),
+                "gross_margin_pct": _safe_float(p.get("grossMargins")),
+            })
+        except Exception as e:
+            print(f"[v2] peer row failed: {e}")
+    return result
+
+
+def _prepare_news_v2(fetcher_results: dict) -> list:
+    articles = []
+    news = fetcher_results.get("news") or {}
+    if news.get("status") == "ok":
+        for a in ((news.get("data") or {}).get("articles") or [])[:10]:
+            try:
+                articles.append({
+                    "title": a.get("title", ""),
+                    "source": a.get("source", ""),
+                    "date": a.get("published_at") or a.get("date") or "",
+                    "url": a.get("url", ""),
+                    "snippet": _truncate(a.get("content") or a.get("description") or "", 200),
+                })
+            except Exception:
+                pass
+    return articles
+
+
+def _extract_earnings(r1_data: dict, entity_type: str) -> dict:
+    if entity_type != "public_equity":
+        return {}
+    try:
+        yfd = (r1_data.get("yfinance") or {}).get("data") or {}
+        finnhub = (r1_data.get("finnhub") or {}).get("data") or {}
+        return {
+            "next_earnings_date": yfd.get("earnings_date"),
+            "eps_estimate": finnhub.get("eps_estimate"),
+            "eps_actual": finnhub.get("eps_actual"),
+        }
+    except Exception as e:
+        print(f"[v2] _extract_earnings failed: {e}")
+    return {}
+
+
+def _extract_guidance(r1_data: dict, entity_type: str) -> dict:
+    if entity_type != "public_equity":
+        return {}
+    try:
+        finnhub = (r1_data.get("finnhub") or {}).get("data") or {}
+        guidance_raw = finnhub.get("guidance") or []
+        items = [
+            {"metric": g.get("metric", ""), "guidance": g.get("value") or g.get("guidance", ""), "sentiment": g.get("sentiment", "neutral")}
+            for g in (guidance_raw if isinstance(guidance_raw, list) else [])
+        ]
+        return {"period": finnhub.get("period", ""), "items": items}
+    except Exception as e:
+        print(f"[v2] _extract_guidance failed: {e}")
+    return {}
+
+
+def _extract_segments(r1_data: dict, entity_type: str) -> list:
+    if entity_type != "public_equity":
+        return []
+    try:
+        sec = (r1_data.get("sec_edgar") or {}).get("data") or {}
+        segments_raw = sec.get("segments") or []
+        return [
+            {"name": s.get("name", ""), "metric": s.get("metric", ""), "context": s.get("context", "")}
+            for s in (segments_raw if isinstance(segments_raw, list) else [])
+        ]
+    except Exception as e:
+        print(f"[v2] _extract_segments failed: {e}")
+    return []
+
+
+def _extract_funding(r1_data: dict, entity_type: str) -> dict:
+    if entity_type in ("public_equity", "crypto"):
+        return {}
+    try:
+        rd = (r1_data.get("rootdata") or {}).get("data") or {}
+        return {
+            "total_raised": rd.get("total_funding") or rd.get("total_raised"),
+            "last_round": rd.get("last_round") or rd.get("latest_round"),
+            "key_investors": rd.get("investors") or rd.get("key_investors") or [],
+        }
+    except Exception as e:
+        print(f"[v2] _extract_funding failed: {e}")
+    return {}
+
+
+def prepare_structured_data(
+    company_name: str,
+    entity_type: str,
+    r1_data: dict,
+    fetcher_results: dict,
+    peer_data: list,
+    technical: dict | None,
+) -> dict:
+    """Pure code extraction layer (v2). No LLM — all values directly from API responses."""
+    return {
+        "company_name": company_name,
+        "entity_type": entity_type,
+        "research_date": date.today().isoformat(),
+        "price": _extract_price(r1_data, entity_type),
+        "financials": _extract_financials(r1_data, entity_type),
+        "valuation": _extract_valuation(r1_data, entity_type),
+        "technicals": _format_technical_snapshot_v2(technical),
+        "peers": _format_peer_table(peer_data),
+        "news_for_compression": _prepare_news_v2(fetcher_results),
+        "text_for_compression": {
+            "website": _truncate((r1_data.get("website") or {}).get("data") or "", 2000),
+            "wikipedia": _truncate((r1_data.get("wikipedia") or {}).get("data") or "", 2000),
+        },
+        "earnings": _extract_earnings(r1_data, entity_type),
+        "guidance": _extract_guidance(r1_data, entity_type),
+        "segments": _extract_segments(r1_data, entity_type),
+        "funding": _extract_funding(r1_data, entity_type),
+    }
+
+
 async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False) -> dict:
     t0 = time.time()
     _timing: dict = {}
@@ -800,21 +1088,28 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
         articles = fetcher_results["news"]["data"].get("articles", [])
         articles = deduplicate_news(articles)  # Layer 6
         articles = rank_articles(articles, company_name)  # Layer 7
-        fetcher_results["news"]["data"]["articles"] = articles
-        print(f"[strategy] news final: {len(articles)} articles after dedup+rank")
+        # Priority filter: keep articles above threshold (v2 quality improvement applied to all pipelines)
+        _HIGH_PRI = 0.65
+        filtered = [a for a in articles if a.get("_priority_score", 0) >= _HIGH_PRI][:10]
+        if len(filtered) < 3:
+            filtered = articles[:5]
+        fetcher_results["news"]["data"]["articles"] = filtered
+        print(f"[strategy] news final: {len(filtered)} articles after dedup+rank+filter (threshold={_HIGH_PRI})")
 
-    # ── Round 2: LLM-guided follow-up search ──────────────────────────────
-    round2_articles = await _round2_search(company_name, company_full_name, fetcher_results)
-    if round2_articles and "news" in fetcher_results and fetcher_results["news"]["status"] == "ok":
-        existing_urls = {a["url"] for a in fetcher_results["news"]["data"].get("articles", [])}
-        new_articles = [a for a in round2_articles if a.get("url") not in existing_urls]
-        fetcher_results["news"]["data"]["articles"].extend(new_articles)
-        # Re-dedup + re-rank with round 2 additions
-        all_articles = fetcher_results["news"]["data"]["articles"]
-        all_articles = deduplicate_news(all_articles)
-        all_articles = rank_articles(all_articles, company_name)
-        fetcher_results["news"]["data"]["articles"] = all_articles
-        print(f"[round2] merged +{len(new_articles)} articles, total={len(all_articles)}")
+    _pipeline_v2 = os.environ.get("DEEPLOOK_PIPELINE_V2", "").lower() == "true"
+
+    # ── Round 2: LLM-guided follow-up search (v1 only) ─────────────────────
+    if not _pipeline_v2:
+        round2_articles = await _round2_search(company_name, company_full_name, fetcher_results)
+        if round2_articles and "news" in fetcher_results and fetcher_results["news"]["status"] == "ok":
+            existing_urls = {a["url"] for a in fetcher_results["news"]["data"].get("articles", [])}
+            new_articles = [a for a in round2_articles if a.get("url") not in existing_urls]
+            fetcher_results["news"]["data"]["articles"].extend(new_articles)
+            all_articles = fetcher_results["news"]["data"]["articles"]
+            all_articles = deduplicate_news(all_articles)
+            all_articles = rank_articles(all_articles, company_name)
+            fetcher_results["news"]["data"]["articles"] = all_articles
+            print(f"[round2] merged +{len(new_articles)} articles, total={len(all_articles)}")
 
     elapsed = time.time() - t0
     api_calls = len(r1_tasks) + len(r2_tasks) + 1  # +1 for detect_company_type
@@ -872,64 +1167,88 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
         if v.get("status") not in ("rejected",)
     }
 
-    # Synthesize final judgment (pass entity_type so LLM applies correct framework)
-    # P0-3: catch RuntimeError if all LLM providers fail — return error dict instead of crash
-    _t = time.time()
-    try:
-        judgment = synthesize(company_name, entity_type, judgment_results, elapsed, api_calls)
-    except RuntimeError as e:
-        print(f"[research] LLM synthesis failed (no API keys?): {e}", file=sys.stderr)
-        judgment = {
-            "error": f"LLM synthesis failed: {e}",
-            "metadata": {
-                "total_time_seconds": round(elapsed, 2),
-                "total_api_calls": api_calls,
-                "llm_model_used": "none",
-                "llm_tokens_used": 0,
-            },
-        }
-    _timing["synthesize_total"] = round(time.time() - _t, 2)
-    # Extract per-LLM-call timings stashed in metadata by synthesize()
-    _meta = (judgment.get("metadata") or {})
-    for _k in ("llm_extract", "llm_judge", "llm_act"):
-        _v = _meta.pop(f"_timing_{_k}", None)
-        if _v is not None:
-            _timing[_k] = _v
-
-    # ── LLM peer fallback: if no peer_comparison yet, use tickers from judgment ──
-    if not peer_comparison:
-        try:
-            _cl = (judgment.get("competitive_landscape") or {})
-            _llm_tickers = [
-                t.strip().upper() for t in (_cl.get("peer_tickers") or [])[:3]
-                if isinstance(t, str) and t.strip()
-            ]
-            if _llm_tickers:
-                print(f"[peers] LLM-suggested tickers: {_llm_tickers}")
-                peer_comparison = await asyncio.wait_for(
-                    fetch_peer_data(_llm_tickers), timeout=5.0
-                )
-                print(f"[peers] LLM batch got {len(peer_comparison)} records")
-        except Exception as _e:
-            print(f"[peers] LLM peer batch failed: {_e}")
-
     _timing["total_wall"] = round(time.time() - t0, 2)
 
-    # Add metadata
-    output = {
-        "company": company_name,
-        "company_type": company_type,
-        "entity_type": entity_type,
-        "sources_succeeded": succeeded,
-        "sources_failed": failed,
-        "api_calls": api_calls,
-        "elapsed_seconds": round(elapsed, 1),
-        "fetcher_results": fetcher_results,
-        "peer_comparison": peer_comparison,
-        "technical_snapshot": technical_snapshot,
-        "judgment": judgment,
-        "_timing": _timing,
-    }
+    if _pipeline_v2:
+        # ── v2: Code Processing Layer + Haiku Compress ────────────────────
+        from deeplook.judgment.synthesize import compress_context
+        _t = time.time()
+        structured_data = prepare_structured_data(
+            company_name, entity_type, r1_data, fetcher_results, peer_comparison, technical_snapshot
+        )
+        compressed = await compress_context(structured_data)
+        _timing["compress_context"] = round(time.time() - _t, 2)
+
+        _timing["total_wall"] = round(time.time() - t0, 2)
+        output = {
+            "_version": "2.0",
+            "company": company_name,
+            "company_type": company_type,
+            "entity_type": entity_type,
+            "ticker": resolved_ticker,
+            "sources_succeeded": succeeded,
+            "sources_failed": failed,
+            "api_calls": api_calls,
+            "elapsed_seconds": round(elapsed, 1),
+            "structured_data": structured_data,
+            "compressed": compressed,
+            "_timing": _timing,
+        }
+    else:
+        # ── v1: four-stage LLM synthesis ───────────────────────────────────
+        _t = time.time()
+        try:
+            judgment = synthesize(company_name, entity_type, judgment_results, elapsed, api_calls)
+        except RuntimeError as e:
+            print(f"[research] LLM synthesis failed (no API keys?): {e}", file=sys.stderr)
+            judgment = {
+                "error": f"LLM synthesis failed: {e}",
+                "metadata": {
+                    "total_time_seconds": round(elapsed, 2),
+                    "total_api_calls": api_calls,
+                    "llm_model_used": "none",
+                    "llm_tokens_used": 0,
+                },
+            }
+        _timing["synthesize_total"] = round(time.time() - _t, 2)
+        _meta = (judgment.get("metadata") or {})
+        for _k in ("llm_extract", "llm_judge", "llm_act"):
+            _v = _meta.pop(f"_timing_{_k}", None)
+            if _v is not None:
+                _timing[_k] = _v
+
+        # LLM peer fallback: if no peer_comparison yet, use tickers from judgment
+        if not peer_comparison:
+            try:
+                _cl = (judgment.get("competitive_landscape") or {})
+                _llm_tickers = [
+                    t.strip().upper() for t in (_cl.get("peer_tickers") or [])[:3]
+                    if isinstance(t, str) and t.strip()
+                ]
+                if _llm_tickers:
+                    print(f"[peers] LLM-suggested tickers: {_llm_tickers}")
+                    peer_comparison = await asyncio.wait_for(
+                        fetch_peer_data(_llm_tickers), timeout=5.0
+                    )
+                    print(f"[peers] LLM batch got {len(peer_comparison)} records")
+            except Exception as _e:
+                print(f"[peers] LLM peer batch failed: {_e}")
+
+        _timing["total_wall"] = round(time.time() - t0, 2)
+        output = {
+            "company": company_name,
+            "company_type": company_type,
+            "entity_type": entity_type,
+            "sources_succeeded": succeeded,
+            "sources_failed": failed,
+            "api_calls": api_calls,
+            "elapsed_seconds": round(elapsed, 1),
+            "fetcher_results": fetcher_results,
+            "peer_comparison": peer_comparison,
+            "technical_snapshot": technical_snapshot,
+            "judgment": judgment,
+            "_timing": _timing,
+        }
 
     # Print to stdout
     output_json = json.dumps(output, indent=2, default=str)
@@ -948,7 +1267,8 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
     # When eval.py runs this as a subprocess it captures stdout to parse JSON;
     # format_report output would appear after the JSON and cause "Extra data" errors.
     if output_file or sys.stdout.isatty():
-        formatter = format_layer1 if layer1 else format_report
+        from deeplook.formatter import format_dual_output_v2
+        formatter = format_dual_output_v2 if _pipeline_v2 else (format_layer1 if layer1 else format_report)
         if output_file:
             buf = io.StringIO()
             with redirect_stdout(buf):

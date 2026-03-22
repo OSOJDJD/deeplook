@@ -533,6 +533,145 @@ Rules:
 """
 
 
+COMPRESS_SYSTEM = """You are a data compression and lightweight analysis agent. You receive pre-structured company research data. Your job is to (1) compress text into concise summaries, (2) generate analysis hooks, and (3) produce a lightweight verdict based strictly on the provided data.
+
+## Your 4 tasks:
+
+### Task 1 — Company Overview
+Compress the website text and Wikipedia text into 3-5 sentences covering:
+- What the company does (one sentence)
+- Key products/services
+- Recent strategic direction (if evident from text)
+Use only facts from the provided text. English only.
+
+### Task 2 — News Summary
+For each news article provided, produce ONE bullet point (max 2 sentences):
+- What happened + when + quantitative impact if available
+- Drop articles that are duplicates or pure opinion with no data
+Output as array, ordered by date descending. Max 8 items.
+
+### Task 3 — Analysis Hooks
+Generate 3-5 analysis hooks — these are QUESTIONS or OBSERVATIONS for a senior analyst to investigate, NOT conclusions. Format: each hook identifies a data point and frames it as something worth examining.
+
+Good hooks:
+- "Revenue grew 23% but operating margin compressed from 28% to 22% — worth examining whether growth is profitable"
+- "3 of top 5 institutional holders reduced positions in Q4 — may signal valuation concern at current levels"
+- "RSI at 72 while price is 15% above 200d MA — technically extended, watch for mean reversion"
+
+Bad hooks (too conclusory):
+- "NVIDIA is a strong buy based on AI demand"
+- "The stock is overvalued"
+- "Investors should accumulate on dips"
+
+### Task 4 — Lightweight Verdict
+Produce a short, evidence-based verdict from the provided data. This helps downstream LLMs (especially smaller models) that may not synthesize well from raw data alone. Stronger models will form their own judgment and may override this.
+
+Rules for verdict:
+- one_line: max 15 words, direct assessment with a number from the data
+- stance: bullish / bearish / neutral — pick one, do not hedge
+- bull_case: ONE sentence, must contain a specific number from the financials/valuation data
+- bear_case: ONE sentence, must contain a specific number or named risk
+- wait_for: ONE specific upcoming event or catalyst from the data. If none exists, write "No confirmed catalyst in current data"
+- action: research_deeper / monitor / avoid / wait_for_catalyst
+  - revenue_growth > 20% AND positive signals → research_deeper
+  - steady metrics, no dramatic change → monitor
+  - major negative signals or data gaps → avoid or wait_for_catalyst
+
+IMPORTANT: The verdict must be derived ONLY from the structured data provided (financials, technicals, valuation, news, peers). Do not use general knowledge. If data is insufficient for a confident verdict, set confidence = "low" and explain in one_line.
+
+## Output (valid JSON only):
+{
+  "overview": "3-5 sentence company overview",
+  "news_bullets": [
+    {"date": "YYYY-MM-DD", "summary": "1-2 sentence summary", "sentiment": "positive|negative|neutral", "source": "source name"}
+  ],
+  "analysis_hooks": [
+    "hook 1 — observation + question",
+    "hook 2 — observation + question",
+    "hook 3 — observation + question"
+  ],
+  "verdict": {
+    "one_line": "max 15 words, direct assessment with a number",
+    "stance": "bullish|bearish|neutral",
+    "bull_case": "ONE sentence with a specific number",
+    "bear_case": "ONE sentence with a specific number or named risk",
+    "wait_for": "ONE specific upcoming event, or 'No confirmed catalyst in current data'",
+    "action": "research_deeper|monitor|avoid|wait_for_catalyst",
+    "confidence": "high|medium|low"
+  }
+}
+
+RULES:
+- English only, even if source text is in other languages
+- Numbers must be exact (from source data). Never write "significant" or "substantial".
+- If website/wiki text is empty or irrelevant, write overview as "No company description available from sources."
+- Do not add information not present in the provided data.
+- Return valid JSON only. No markdown, no explanation."""
+
+
+async def compress_context(structured_data: dict) -> dict:
+    """Single Haiku call: compress text + generate analysis hooks + lightweight verdict.
+    Input: output of prepare_structured_data()
+    Output: {overview, news_bullets, analysis_hooks, verdict, _model, _tokens}
+    """
+    import asyncio as _asyncio
+
+    company_name = structured_data.get("company_name", "")
+    entity_type = structured_data.get("entity_type", "")
+
+    user_prompt = (
+        f"Company: {company_name}\nType: {entity_type}\n\n"
+        f"=== Website Text ===\n"
+        f"{structured_data.get('text_for_compression', {}).get('website', '') or 'No website text available.'}\n\n"
+        f"=== Wikipedia Text ===\n"
+        f"{structured_data.get('text_for_compression', {}).get('wikipedia', '') or 'No Wikipedia text available.'}\n\n"
+        f"=== News Articles (pre-filtered, priority > 0.65) ===\n"
+        f"{json.dumps(structured_data.get('news_for_compression', []), indent=2)}\n\n"
+        f"=== Key Financials (for context in hooks) ===\n"
+        f"{json.dumps(structured_data.get('financials', {}), indent=2)}\n\n"
+        f"=== Technicals (for context in hooks) ===\n"
+        f"{json.dumps(structured_data.get('technicals', {}), indent=2)}\n\n"
+        f"=== Valuation (for context in hooks) ===\n"
+        f"{json.dumps(structured_data.get('valuation', {}), indent=2)}\n\n"
+        f"Respond with valid JSON only."
+    )
+
+    try:
+        result, model, tokens = await _asyncio.to_thread(
+            _call_llm_with_retry,
+            user_prompt, COMPRESS_SYSTEM, "extract", "compress_context",
+            0.2, 2048,
+        )
+        log("compress_context", "OK", f"model={model}, tokens={tokens}")
+        return {
+            "overview": result.get("overview", ""),
+            "news_bullets": result.get("news_bullets", []),
+            "analysis_hooks": result.get("analysis_hooks", []),
+            "verdict": result.get("verdict", {}),
+            "_model": model,
+            "_tokens": tokens,
+        }
+    except Exception as e:
+        log("compress_context", "FAIL", str(e))
+        print(f"[compress_context] failed: {e}")
+        return {
+            "overview": "No company description available from sources.",
+            "news_bullets": [],
+            "analysis_hooks": [],
+            "verdict": {
+                "one_line": "Compression step failed — insufficient data",
+                "stance": "neutral",
+                "bull_case": "",
+                "bear_case": "",
+                "wait_for": "No confirmed catalyst in current data",
+                "action": "research_deeper",
+                "confidence": "low",
+            },
+            "_model": "failed",
+            "_tokens": 0,
+        }
+
+
 def generate_search_queries(company_name: str, entity_type: str, round1_data: dict) -> dict:
     """Haiku call between Round 1 and Round 2: generates context-aware search queries."""
     compact = {}

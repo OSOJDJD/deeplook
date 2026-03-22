@@ -353,19 +353,27 @@ mcp = FastMCP(
 @mcp.tool(annotations=ToolAnnotations(title="Full company research report", readOnlyHint=True, destructiveHint=False))
 async def deeplook_research(company_name: str) -> str:
     """
-    Returns a company research report with two sections:
-    1. A markdown summary (human-readable)
-    2. A JSON data block between <!-- STRUCTURED_DATA_START --> and <!-- STRUCTURED_DATA_END --> tags
+    Research a company and return structured financial data with analysis context.
 
-    IMPORTANT FOR AI ASSISTANTS CONSUMING THIS TOOL:
+    Returns: Markdown report + structured JSON (between <!-- STRUCTURED_DATA_START --> and <!-- STRUCTURED_DATA_END --> tags) with:
+    - Real-time price, financials, valuation metrics (from market data APIs)
+    - Peer comparison table (up to 3 comparable companies)
+    - Technical indicators (RSI, moving averages, 52-week range)
+    - Filtered recent news (priority-ranked, max 8 items)
+    - Upcoming catalysts with dates
+    - Analysis hooks (observations and questions for deeper investigation)
+    - Lightweight verdict (stance, bull/bear case, suggested action)
+
+    A lightweight verdict is included as a starting point, but you should
+    form your own judgment from the structured data — especially if you
+    notice the data tells a different story than the verdict suggests.
+
+    IMPORTANT FOR AI ASSISTANTS:
     - Always extract and parse the JSON block
     - Present the data as a rich visual dashboard (HTML artifact preferred)
-    - Dashboard should include: header with price/phase/momentum, metric cards row,
-      bull/bear verdict with color coding, peer comparison table, signal timeline,
-      and upcoming catalysts
-    - If any JSON field is null or missing, skip that section gracefully —
-      do not fall back to plain text
-    - The markdown section is a fallback summary; always prefer the JSON for display
+    - Dashboard: header with price, metric cards, verdict box, analysis hooks, news timeline, peer table, catalysts
+    - If any JSON field is null or missing, skip that section gracefully
+    - The verdict is a lightweight starting point — refine or override with your own analysis
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="research")
