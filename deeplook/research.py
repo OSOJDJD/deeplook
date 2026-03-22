@@ -770,18 +770,12 @@ def _extract_price(r1_data: dict, entity_type: str) -> dict:
                 "currency": yfd.get("currency", "USD"),
             }
         elif entity_type == "crypto":
+            # CoinGecko fetcher returns a FLAT dict (market_data is not nested):
+            # keys: price_usd, market_cap, price_change_30d_pct, volume_24h
             cg = (r1_data.get("coingecko") or {}).get("data") or {}
-            market_data = cg.get("market_data") or {}
-            current = _safe_float(
-                (market_data.get("current_price") or {}).get("usd") or cg.get("current_price")
-            )
-            market_cap = _safe_float(
-                (market_data.get("market_cap") or {}).get("usd") or cg.get("market_cap")
-            )
-            change_30d = _safe_float(
-                market_data.get("price_change_percentage_30d")
-                or (cg.get("price_change_percentage_30d_in_currency") or {}).get("usd")
-            )
+            current = _safe_float(cg.get("price_usd"))
+            market_cap = _safe_float(cg.get("market_cap"))
+            change_30d = _safe_float(cg.get("price_change_30d_pct"))
             pct_str = f"{'+' if (change_30d or 0) >= 0 else ''}{change_30d:.1f}%" if change_30d is not None else None
             return {"current": current, "change_30d": pct_str, "market_cap": _format_currency(market_cap), "currency": "USD"}
     except Exception as e:
@@ -805,9 +799,7 @@ def _extract_financials(r1_data: dict, entity_type: str) -> dict:
             }
         elif entity_type == "crypto":
             dl = (r1_data.get("defillama") or {}).get("data") or {}
-            cg = (r1_data.get("coingecko") or {}).get("data") or {}
-            tvl = dl.get("tvl") or ((cg.get("market_data") or {}).get("total_value_locked") or {}).get("usd")
-            return {"tvl": _format_currency(tvl)}
+            return {"tvl": _format_currency(dl.get("tvl"))}
     except Exception as e:
         print(f"[v2] _extract_financials failed: {e}")
     return {}
@@ -826,17 +818,96 @@ def _extract_valuation(r1_data: dict, entity_type: str) -> dict:
                 "analyst_target": _safe_float(yfd.get("target_mean_price") or yfd.get("targetMeanPrice")),
             }
         elif entity_type == "crypto":
+            # CoinGecko flat keys: market_cap (not market_data.market_cap.usd)
+            # DeFiLlama already computes mcap_to_tvl
             cg = (r1_data.get("coingecko") or {}).get("data") or {}
             dl = (r1_data.get("defillama") or {}).get("data") or {}
-            market_data = cg.get("market_data") or {}
-            fdv = (market_data.get("fully_diluted_valuation") or {}).get("usd")
-            mcap = _safe_float((market_data.get("market_cap") or {}).get("usd") or cg.get("market_cap"))
+            mcap = _safe_float(cg.get("market_cap"))
             tvl = _safe_float(dl.get("tvl"))
-            mcap_to_tvl = round(mcap / tvl, 2) if mcap and tvl else None
-            return {"fdv": _format_currency(fdv), "mcap_to_tvl": mcap_to_tvl}
+            # Use DeFiLlama's pre-computed ratio if available, else compute
+            mcap_to_tvl = dl.get("mcap_to_tvl") or (round(mcap / tvl, 2) if mcap and tvl else None)
+            return {"mcap_to_tvl": mcap_to_tvl}
     except Exception as e:
         print(f"[v2] _extract_valuation failed: {e}")
     return {}
+
+
+def _extract_crypto_numbers(r1_data: dict) -> dict:
+    """Extract crypto-specific metrics from CoinGecko/DeFiLlama data.
+    CoinGecko fetcher returns flat keys: price_usd, market_cap, price_change_30d_pct, volume_24h.
+    DeFiLlama returns: tvl, mcap_to_tvl, category, chains_count.
+    """
+    try:
+        cg = (r1_data.get("coingecko") or {}).get("data") or {}
+        dl = (r1_data.get("defillama") or {}).get("data") or {}
+
+        mcap = _safe_float(cg.get("market_cap"))
+        tvl = _safe_float(dl.get("tvl"))
+        mcap_to_tvl = dl.get("mcap_to_tvl") or (round(mcap / tvl, 3) if mcap and tvl and tvl > 0 else None)
+
+        return {
+            "token_price": _safe_float(cg.get("price_usd")),
+            "price_change_24h": None,  # not in fetcher output currently
+            "price_change_30d": _safe_float(cg.get("price_change_30d_pct")),
+            "market_cap": mcap,
+            "volume_24h": _safe_float(cg.get("volume_24h")),
+            "tvl": tvl,
+            "mcap_tvl_ratio": mcap_to_tvl,
+            "category": dl.get("category"),
+            "chains_count": dl.get("chains_count"),
+            "top_3_chains": dl.get("top_3_chains"),
+            "coin_id": cg.get("coin_id"),
+        }
+    except Exception as e:
+        print(f"[v2] _extract_crypto_numbers failed: {e}")
+        return {}
+
+
+def _extract_vc_numbers(r1_data: dict) -> dict:
+    """Extract VC/private company metrics from RootData.
+    RootData returns nested: project_details (raw API JSON) + funding (raw API JSON).
+    We drill into known RootData API response shapes.
+    """
+    try:
+        rd = (r1_data.get("rootdata") or {}).get("data") or {}
+        if not rd.get("success"):
+            print(f"[v2] _extract_vc_numbers: rootdata not ok, keys={list(rd.keys())}")
+            return {}
+
+        # RootData project_details is typically {"code": 200, "data": {...}}
+        pd_raw = rd.get("project_details") or {}
+        pd = pd_raw.get("data") or pd_raw  # unwrap if nested
+
+        # RootData funding response: {"code": 200, "data": {"items": [...]}}
+        fund_raw = rd.get("funding") or {}
+        fund_data = fund_raw.get("data") or fund_raw
+        fund_items = fund_data.get("items") or fund_data.get("list") or []
+
+        # Debug: print top-level keys so we can tune if schema differs
+        print(f"[v2] rootdata project_details keys: {list(pd.keys())}")
+        print(f"[v2] rootdata funding keys: {list(fund_data.keys())}")
+
+        # Extract portfolio/investment list
+        portfolio = pd.get("portfolios") or pd.get("investments") or pd.get("projects") or []
+        notable = [p.get("name") or p.get("project_name") for p in portfolio[:5] if p.get("name") or p.get("project_name")]
+
+        # Extract most recent fund from fund_items
+        last_fund_item = fund_items[0] if fund_items else {}
+
+        return {
+            "aum": pd.get("aum") or pd.get("total_fund_size") or pd.get("fund_size"),
+            "total_investments": pd.get("investment_count") or pd.get("portfolio_count") or pd.get("total_investments") or len(portfolio) or None,
+            "notable_investments": notable,
+            "last_fund": last_fund_item.get("fund_name") or last_fund_item.get("name"),
+            "last_fund_size": last_fund_item.get("amount") or last_fund_item.get("fund_size"),
+            "stage_focus": pd.get("stage") or pd.get("investment_stage") or pd.get("focus_stage"),
+            "hq": pd.get("location") or pd.get("headquarters") or pd.get("country"),
+            "founded": pd.get("founded") or pd.get("established"),
+            "description": (pd.get("description") or "")[:300],
+        }
+    except Exception as e:
+        print(f"[v2] _extract_vc_numbers failed: {e}")
+        return {}
 
 
 def _format_technical_snapshot_v2(technical: dict | None) -> dict:
@@ -1018,7 +1089,7 @@ def prepare_structured_data(
     technical: dict | None,
 ) -> dict:
     """Pure code extraction layer (v2). No LLM — all values directly from API responses."""
-    return {
+    base = {
         "company_name": company_name,
         "entity_type": entity_type,
         "research_date": date.today().isoformat(),
@@ -1038,6 +1109,12 @@ def prepare_structured_data(
         "funding": _extract_funding(r1_data, entity_type),
         "company_meta": _extract_company_meta(fetcher_results),
     }
+    # Entity-specific supplemental data
+    if entity_type == "crypto":
+        base["crypto_numbers"] = _extract_crypto_numbers(r1_data)
+    elif entity_type in ("venture_capital", "private_or_unlisted", "foundation"):
+        base["vc_numbers"] = _extract_vc_numbers(r1_data)
+    return base
 
 
 async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False) -> dict:

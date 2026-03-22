@@ -533,36 +533,87 @@ Rules:
 """
 
 
-COMPRESS_SYSTEM = """You are a financial research assistant. Given raw company data, extract two things:
+def _build_compress_prompt(entity_type: str) -> str:
+    """Build entity-specific compress prompt for Haiku."""
+    base = """You are a financial research assistant. Given the raw data below, extract:
 
-1. NEWS_BULLETS: Up to 5 most relevant recent news items. One sentence each. Facts and numbers only — no opinion, no conclusions. Drop duplicates and pure-opinion pieces.
+1. RECENT_NEWS: Up to 5 most relevant recent events. One sentence each. Facts only, no opinion.
+   Format: - [YYYY-MM-DD] sentence
 
-2. ANALYSIS_HOOKS: Up to 3 angles worth investigating. Each must reference specific data points from the provided data. Frame as observation + what to examine, not as conclusion.
+2. FORWARD_LOOKING: Up to 3 upcoming events or things to watch. Each must have a date or timeframe if possible.
+   Format: - item
 
-Good hooks:
-- "Revenue grew 23% but operating margin compressed 28%→22% — worth examining whether growth is profitable"
-- "RSI at 72 while price is 15% above 200d MA — technically extended, watch for mean reversion"
+3. ENTITY_CONTEXT: Up to 3 qualitative observations that code cannot extract — things only apparent from reading news/text.
+   Format: - observation
 
-Bad hooks (too conclusory):
-- "NVIDIA is a strong buy"
-- "The stock is overvalued"
+4. VERDICT: Lightweight starting point — a higher-end model will override this. Be direct and specific.
+   - one_line: max 15 words, direct assessment with a number
+   - stance: pick exactly one of bullish/bearish/neutral, no hedging
+   - bull_case: one sentence, max 35 words, must contain a specific number
+   - bear_case: one sentence, max 35 words, must contain a specific number or named risk
+   - wait_for: ONE specific upcoming event — no semicolons, no lists
+   - action: revenue_growth > 20% + positive signals → research_deeper; steady → monitor; major negative → avoid; unclear → wait_for_catalyst
+   - confidence: high if strong data, medium if partial, low if data is insufficient
+"""
 
-Do NOT provide any verdict, bull/bear case, stance, investment recommendation, or company overview.
+    entity_guidance = {
+        "public_equity": """
+For RECENT_NEWS, prioritize: earnings results, analyst upgrades/downgrades, institutional activity (13F), M&A rumors, product launches, regulatory actions.
+For FORWARD_LOOKING, prioritize: next earnings date + what to watch, analyst consensus target, upcoming catalysts with dates.
+For ENTITY_CONTEXT, look for: management tone shift, competitive dynamics not in numbers, sector rotation signals.""",
 
-Output (valid JSON only, max 200 words total):
+        "crypto": """
+For RECENT_NEWS, prioritize: governance proposals/votes, security incidents (hacks/exploits), major partnerships, protocol upgrades, token unlock events, regulatory actions.
+For FORWARD_LOOKING, prioritize: upcoming governance votes with dates, token unlock schedule, roadmap milestones, regulatory deadlines.
+For ENTITY_CONTEXT, look for: TVL trend direction, developer activity signals, community sentiment shift, competitive protocol dynamics.""",
+
+        "venture_capital": """
+For RECENT_NEWS, prioritize: new funding rounds (amount + lead investor), key executive hires/departures, notable portfolio investments or exits, fund launches, strategic pivots.
+For FORWARD_LOOKING, prioritize: expected next fund close, sector thesis signals, upcoming portfolio company events (IPO, acquisition).
+For ENTITY_CONTEXT, look for: investment thesis evolution, portfolio concentration risk, team changes that signal strategy shift.""",
+
+        "private_or_unlisted": """
+For RECENT_NEWS, prioritize: new funding rounds (amount + lead investor), product launches, key partnerships, executive changes, regulatory milestones.
+For FORWARD_LOOKING, prioritize: expected funding round, IPO signals, product launch dates, expansion milestones.
+For ENTITY_CONTEXT, look for: competitive positioning, market traction signals, team strength.""",
+
+        "defunct": """
+For RECENT_NEWS, prioritize: legal proceedings updates, regulatory actions, creditor recovery distributions, key personnel indictments/settlements, asset sales.
+For FORWARD_LOOKING, prioritize: next court date, expected distribution timeline, pending regulatory decisions.
+For ENTITY_CONTEXT, look for: recovery rate vs expectations, knock-on effects on industry, lessons cited by regulators.""",
+    }
+
+    guidance = entity_guidance.get(entity_type) or entity_guidance.get("private_or_unlisted", "")
+
+    footer = """
+STRICT RULES:
+- Maximum 350 words total output
+- Facts only. No company overview.
+- Each bullet = one sentence. No multi-sentence bullets.
+- If data is insufficient for a section, write "- Insufficient data" and move on.
+- For verdict: if data is insufficient, set confidence = "low" and still provide best-effort stance.
+
+Output valid JSON only:
 {
-  "news_bullets": [
-    {"date": "YYYY-MM-DD", "summary": "one sentence with facts", "sentiment": "positive|negative|neutral", "source": "source name"}
+  "recent_news": [
+    {"date": "YYYY-MM-DD", "summary": "one sentence with facts", "sentiment": "positive|negative|neutral"}
   ],
-  "analysis_hooks": [
-    "observation referencing specific data — what to investigate"
-  ]
+  "forward_looking": ["item with date or timeframe"],
+  "entity_context": ["qualitative observation"],
+  "verdict": {
+    "one_line": "max 15 words, direct assessment with a number",
+    "stance": "bullish|bearish|neutral",
+    "bull_case": "ONE sentence, max 35 words, must contain a specific number",
+    "bear_case": "ONE sentence, max 35 words, must contain a specific number or named risk",
+    "wait_for": "ONE specific upcoming event. No semicolons.",
+    "action": "research_deeper|monitor|avoid|wait_for_catalyst",
+    "confidence": "high|medium|low"
+  }
 }
 
-Rules:
-- English only
-- Numbers must be exact (from source data)
-- Return valid JSON only. No markdown, no explanation."""
+Return valid JSON only. No markdown, no explanation."""
+
+    return base + guidance + footer
 
 
 def _enforce_word_limits(verdict: dict) -> dict:
@@ -597,36 +648,48 @@ def _enforce_word_limits(verdict: dict) -> dict:
 
 
 async def compress_context(structured_data: dict) -> dict:
-    """Single Haiku call: extract news bullets + analysis hooks.
+    """Single Haiku call: extract recent news, forward-looking items, entity context.
     Input: output of prepare_structured_data()
-    Output: {news_bullets, analysis_hooks, _model, _tokens}
+    Output: {recent_news, forward_looking, entity_context, _model, _tokens}
     """
     import asyncio as _asyncio
 
     company_name = structured_data.get("company_name", "")
     entity_type = structured_data.get("entity_type", "")
+    compress_system = _build_compress_prompt(entity_type)
+
+    # Build text context: news + website/wiki snippets + entity-specific numbers
+    extra_context = ""
+    crypto_nums = structured_data.get("crypto_numbers") or {}
+    vc_nums = structured_data.get("vc_numbers") or {}
+    if crypto_nums:
+        extra_context = f"\n=== Crypto Metrics ===\n{json.dumps(crypto_nums, indent=2)}\n"
+    elif vc_nums:
+        extra_context = f"\n=== VC/Fund Data ===\n{json.dumps(vc_nums, indent=2)}\n"
 
     user_prompt = (
         f"Company: {company_name}\nType: {entity_type}\n\n"
         f"=== News Articles ===\n"
         f"{json.dumps(structured_data.get('news_for_compression', []), indent=2)}\n\n"
-        f"=== Key Financials (for hook context) ===\n"
-        f"{json.dumps(structured_data.get('financials', {}), indent=2)}\n\n"
-        f"=== Technicals (for hook context) ===\n"
-        f"{json.dumps(structured_data.get('technicals', {}), indent=2)}\n\n"
+        f"=== Website/Wikipedia Text ===\n"
+        f"{json.dumps(structured_data.get('text_for_compression', {}), indent=2)}\n"
+        f"{extra_context}\n"
         f"Respond with valid JSON only."
     )
 
     try:
         result, model, tokens = await _asyncio.to_thread(
             _call_llm_with_retry,
-            user_prompt, COMPRESS_SYSTEM, "extract", "compress_context",
+            user_prompt, compress_system, "extract", "compress_context",
             0.2, 800,
         )
         log("compress_context", "OK", f"model={model}, tokens={tokens}")
+        verdict = _enforce_word_limits(result.get("verdict") or {})
         return {
-            "news_bullets": result.get("news_bullets", []),
-            "analysis_hooks": result.get("analysis_hooks", []),
+            "recent_news": result.get("recent_news", []),
+            "forward_looking": result.get("forward_looking", []),
+            "entity_context": result.get("entity_context", []),
+            "verdict": verdict,
             "_model": model,
             "_tokens": tokens,
         }
@@ -634,8 +697,10 @@ async def compress_context(structured_data: dict) -> dict:
         log("compress_context", "FAIL", str(e))
         print(f"[compress_context] failed: {e}")
         return {
-            "news_bullets": [],
-            "analysis_hooks": [],
+            "recent_news": [],
+            "forward_looking": [],
+            "entity_context": [],
+            "verdict": {},
             "_model": "failed",
             "_tokens": 0,
         }

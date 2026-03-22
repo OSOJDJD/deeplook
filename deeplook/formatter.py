@@ -1053,9 +1053,9 @@ def build_structured_json_v2(data: dict) -> dict:
         except Exception:
             pass
 
-    news = [
-        {"date": n.get("date"), "summary": n.get("summary"), "sentiment": n.get("sentiment"), "source": n.get("source")}
-        for n in (cm.get("news_bullets") or [])
+    recent_news = [
+        {"date": n.get("date"), "summary": n.get("summary"), "sentiment": n.get("sentiment")}
+        for n in (cm.get("recent_news") or [])
     ]
 
     price_info = sd.get("price") or {}
@@ -1066,7 +1066,7 @@ def build_structured_json_v2(data: dict) -> dict:
     funding = sd.get("funding") or {}
     meta_overview = sd.get("company_meta") or {}
 
-    return {
+    out = {
         "version": "2.0",
         "company": data.get("company", ""),
         "ticker": data.get("ticker"),
@@ -1107,8 +1107,10 @@ def build_structured_json_v2(data: dict) -> dict:
             "next_earnings": str(earnings.get("next_earnings_date"))[:10] if earnings.get("next_earnings_date") else None,
         },
         "peers": peers,
-        "news": news,
-        "analysis_hooks": cm.get("analysis_hooks", []),
+        "recent_news": recent_news,
+        "forward_looking": cm.get("forward_looking", []),
+        "entity_context": cm.get("entity_context", []),
+        "verdict": cm.get("verdict") or {},
         "funding": funding if et not in ("public_equity",) else {},
         "meta": {
             "company_meta": meta_overview,
@@ -1120,112 +1122,126 @@ def build_structured_json_v2(data: dict) -> dict:
         },
     }
 
+    # Entity-specific supplemental fields
+    if et == "crypto":
+        cn = sd.get("crypto_numbers") or {}
+        out["crypto"] = {
+            "token_price": cn.get("token_price"),
+            "price_change_24h": cn.get("price_change_24h"),
+            "price_change_30d": cn.get("price_change_30d"),
+            "market_cap": cn.get("market_cap"),
+            "volume_24h": cn.get("volume_24h"),
+            "tvl": cn.get("tvl"),
+            "mcap_tvl_ratio": cn.get("mcap_tvl_ratio"),
+            "category": cn.get("category"),
+            "chains_count": cn.get("chains_count"),
+        }
+    elif et in ("venture_capital", "private_or_unlisted", "foundation"):
+        vn = sd.get("vc_numbers") or {}
+        out["vc"] = {
+            "aum": vn.get("aum"),
+            "total_investments": vn.get("total_investments"),
+            "notable_portfolio": vn.get("notable_investments"),
+            "last_fund": vn.get("last_fund"),
+            "last_fund_size": vn.get("last_fund_size"),
+            "stage_focus": vn.get("stage_focus"),
+            "hq": vn.get("hq"),
+        }
+    elif et == "defunct":
+        out["defunct"] = {
+            "peak_valuation": None,
+            "shutdown_date": None,
+            "creditor_recovery_pct": None,
+            "cause": None,
+        }
+
+    return out
+
 
 def format_dual_output_v2(data: dict) -> str:
-    """v2 pipeline markdown + structured JSON output."""
+    """v2 pipeline: 5-section entity-specific output + structured JSON."""
     import json as _json
 
     structured = build_structured_json_v2(data)
     company = structured.get("company", "")
     ticker = structured.get("ticker") or ""
     ticker_str = f" ({ticker})" if ticker else ""
+    et = structured.get("entity_type", "")
     price_info = structured.get("price") or {}
     fin = structured.get("financials") or {}
     val = structured.get("valuation") or {}
     tech = structured.get("technicals") or {}
     peers = structured.get("peers") or []
-    news = structured.get("news") or []
-    hooks = structured.get("analysis_hooks") or []
+    recent_news = structured.get("recent_news") or []
+    forward_looking = structured.get("forward_looking") or []
+    entity_context = structured.get("entity_context") or []
+    verdict_v2 = structured.get("verdict") or {}
     meta = (structured.get("meta") or {}).get("company_meta") or {}
+    crypto = structured.get("crypto") or {}
+    vc = structured.get("vc") or {}
+    defunct_info = structured.get("defunct") or {}
 
     L = []
 
-    # ── Company Header ──────────────────────────────────────────────────────
+    # ── Section 1: IDENTITY ─────────────────────────────────────────────────
     L.append(f"## {company}{ticker_str}")
-    meta_parts = []
-    if meta.get("sector"):
-        meta_parts.append(f"Sector: {meta['sector']}")
-    if meta.get("industry"):
-        meta_parts.append(f"Industry: {meta['industry']}")
-    if meta.get("team_size"):
-        ts = meta["team_size"]
-        meta_parts.append(f"Employees: {ts:,}" if isinstance(ts, int) else f"Employees: {ts}")
-    if meta_parts:
-        L.append(" | ".join(meta_parts))
-    ceo_parts = []
-    if meta.get("ceo"):
-        ceo_parts.append(f"CEO: {meta['ceo']}")
-    if price_info.get("market_cap"):
-        ceo_parts.append(f"Market Cap: {price_info['market_cap']}")
-    if ceo_parts:
-        L.append(" | ".join(ceo_parts))
+
+    if et == "public_equity":
+        id_parts = []
+        if meta.get("sector"):
+            id_parts.append(f"Sector: {meta['sector']}")
+        if meta.get("industry"):
+            id_parts.append(f"Industry: {meta['industry']}")
+        if meta.get("team_size"):
+            ts = meta["team_size"]
+            id_parts.append(f"Employees: {ts:,}" if isinstance(ts, int) else f"Employees: {ts}")
+        if id_parts:
+            L.append(" | ".join(id_parts))
+        id2 = []
+        if meta.get("ceo"):
+            id2.append(f"CEO: {meta['ceo']}")
+        if price_info.get("market_cap"):
+            id2.append(f"Market Cap: {price_info['market_cap']}")
+        if id2:
+            L.append(" | ".join(id2))
+
+    elif et == "crypto":
+        id_parts = []
+        if crypto.get("category"):
+            id_parts.append(f"Type: {crypto['category']}")
+        if crypto.get("chains_count"):
+            id_parts.append(f"Chains: {crypto['chains_count']}")
+        if id_parts:
+            L.append(" | ".join(id_parts))
+        if price_info.get("market_cap"):
+            L.append(f"Market Cap: {price_info['market_cap']}")
+
+    elif et in ("venture_capital", "private_or_unlisted", "foundation"):
+        id_parts = []
+        if et == "venture_capital":
+            id_parts.append("Type: Venture Capital")
+        if vc.get("stage_focus"):
+            id_parts.append(f"Stage Focus: {vc['stage_focus']}")
+        if vc.get("hq"):
+            id_parts.append(f"HQ: {vc['hq']}")
+        if id_parts:
+            L.append(" | ".join(id_parts))
+        if vc.get("aum"):
+            L.append(f"AUM: {vc['aum']}")
+
+    elif et == "defunct":
+        id_parts = ["Type: Defunct"]
+        if defunct_info.get("shutdown_date"):
+            id_parts.append(f"Shutdown: {defunct_info['shutdown_date']}")
+        if id_parts:
+            L.append(" | ".join(id_parts))
+        if defunct_info.get("cause"):
+            L.append(f"Cause: {defunct_info['cause']}")
+
     L.append("")
 
-    # ── Price & Technicals ──────────────────────────────────────────────────
-    L.append("## PRICE & TECHNICALS")
-
-    # Line 1: Price, Change 1D, Change 30D
-    p1 = []
-    cur = price_info.get("current")
-    if cur is not None:
-        try:
-            p1.append(f"Price: ${float(cur):,.2f}")
-        except Exception:
-            p1.append(f"Price: ${cur}")
-    c1d = price_info.get("change_1d")  # stored in price section of JSON
-    if c1d is not None:
-        try:
-            p1.append(f"Change 1D: {'+' if float(c1d) >= 0 else ''}{float(c1d):.1f}%")
-        except Exception:
-            pass
-    c30d = price_info.get("change_30d")  # stored in price section of JSON
-    if c30d is not None:
-        try:
-            p1.append(f"Change 30D: {'+' if float(c30d) >= 0 else ''}{float(c30d):.1f}%")
-        except Exception:
-            pass
-    if p1:
-        L.append(" | ".join(p1))
-
-    # Line 2: 52W High/Low/Position
-    p2 = []
-    h52 = tech.get("high_52w")
-    l52 = tech.get("low_52w")
-    if h52 is not None:
-        p2.append(f"52W High: ${h52:,.2f}")
-    if l52 is not None:
-        p2.append(f"52W Low: ${l52:,.2f}")
-    pos52 = tech.get("position_52w_pct")
-    if pos52 is not None:
-        p2.append(f"52W Position: {pos52:.1f}%")
-    if p2:
-        L.append(" | ".join(p2))
-
-    # Line 3: RSI, MA50, MA200
-    p3 = []
-    rsi = tech.get("rsi_14")
-    if rsi is not None:
-        p3.append(f"RSI-14: {rsi:.1f}")
-    ma50 = tech.get("ma50")
-    if ma50 is not None:
-        sig = tech.get("ma50_signal", "")
-        dist = tech.get("ma50_distance_pct")
-        dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
-        p3.append(f"MA50: ${ma50:,.2f} ({sig}{dist_str})")
-    ma200 = tech.get("ma200")
-    if ma200 is not None:
-        sig = tech.get("ma200_signal", "")
-        dist = tech.get("ma200_distance_pct")
-        dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
-        p3.append(f"MA200: ${ma200:,.2f} ({sig}{dist_str})")
-    if p3:
-        L.append(" | ".join(p3))
-
-    # Line 4: Volume
-    p4 = []
-    vol = tech.get("volume")
-    avg_vol = tech.get("avg_volume_20d")
-    vol_ratio = tech.get("volume_ratio")
+    # ── Section 2: NUMBERS ──────────────────────────────────────────────────
+    L.append("## NUMBERS")
 
     def _fmt_vol(v):
         if v is None:
@@ -1240,43 +1256,103 @@ def format_dual_output_v2(data: dict) -> str:
         except Exception:
             return None
 
-    if vol is not None:
-        vs = _fmt_vol(vol)
-        if vs:
-            p4.append(f"Volume: {vs}")
-    if avg_vol is not None:
-        vs = _fmt_vol(avg_vol)
-        if vs:
-            p4.append(f"Avg Vol 20D: {vs}")
-    if vol_ratio is not None:
-        p4.append(f"Vol Ratio: {vol_ratio:.2f}x")
-    if p4:
-        L.append(" | ".join(p4))
-
-    # Next Earnings
-    ne = tech.get("next_earnings")
-    if ne:
-        L.append(f"Next Earnings: {ne}")
-    L.append("")
-
-    # ── Financials ──────────────────────────────────────────────────────────
-    has_fin = any(fin.get(k) is not None for k in ("revenue_ttm", "revenue_growth_yoy", "operating_margin", "pe_ratio"))
-    if has_fin or val.get("pe_ratio") is not None:
-        L.append("## FINANCIALS")
-
-        def _fmt_money(v):
-            if v is None:
-                return None
-            try:
-                v = float(v)
-                if v >= 1e12:
-                    return f"${v/1e12:.1f}T"
-                elif v >= 1e9:
-                    return f"${v/1e9:.1f}B"
+    def _fmt_money(v):
+        if v is None:
+            return None
+        try:
+            v = float(v)
+            if v >= 1e12:
+                return f"${v/1e12:.1f}T"
+            elif v >= 1e9:
+                return f"${v/1e9:.1f}B"
+            elif v >= 1e6:
                 return f"${v/1e6:.1f}M"
-            except Exception:
-                return None
+            return f"${v:,.0f}"
+        except Exception:
+            return None
 
+    if et == "public_equity":
+        # Line 1: Price, Change 1D, Change 30D
+        p1 = []
+        cur = price_info.get("current")
+        if cur is not None:
+            try:
+                p1.append(f"Price: ${float(cur):,.2f}")
+            except Exception:
+                p1.append(f"Price: ${cur}")
+        c1d = price_info.get("change_1d")
+        if c1d is not None:
+            try:
+                p1.append(f"Change 1D: {'+' if float(c1d) >= 0 else ''}{float(c1d):.1f}%")
+            except Exception:
+                pass
+        c30d = price_info.get("change_30d")
+        if c30d is not None:
+            try:
+                p1.append(f"Change 30D: {'+' if float(c30d) >= 0 else ''}{float(c30d):.1f}%")
+            except Exception:
+                pass
+        if p1:
+            L.append(" | ".join(p1))
+
+        # Line 2: 52W
+        p2 = []
+        h52 = tech.get("high_52w")
+        l52 = tech.get("low_52w")
+        if h52 is not None:
+            p2.append(f"52W High: ${h52:,.2f}")
+        if l52 is not None:
+            p2.append(f"52W Low: ${l52:,.2f}")
+        pos52 = tech.get("position_52w_pct")
+        if pos52 is not None:
+            p2.append(f"52W Position: {pos52:.1f}%")
+        if p2:
+            L.append(" | ".join(p2))
+
+        # Line 3: RSI, MA
+        p3 = []
+        rsi = tech.get("rsi_14")
+        if rsi is not None:
+            p3.append(f"RSI-14: {rsi:.1f}")
+        ma50 = tech.get("ma50")
+        if ma50 is not None:
+            sig = tech.get("ma50_signal", "")
+            dist = tech.get("ma50_distance_pct")
+            dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
+            p3.append(f"MA50: ${ma50:,.2f} ({sig}{dist_str})")
+        ma200 = tech.get("ma200")
+        if ma200 is not None:
+            sig = tech.get("ma200_signal", "")
+            dist = tech.get("ma200_distance_pct")
+            dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
+            p3.append(f"MA200: ${ma200:,.2f} ({sig}{dist_str})")
+        if p3:
+            L.append(" | ".join(p3))
+
+        # Line 4: Volume
+        p4 = []
+        vol = tech.get("volume")
+        avg_vol = tech.get("avg_volume_20d")
+        vol_ratio = tech.get("volume_ratio")
+        if vol is not None:
+            vs = _fmt_vol(vol)
+            if vs:
+                p4.append(f"Volume: {vs}")
+        if avg_vol is not None:
+            vs = _fmt_vol(avg_vol)
+            if vs:
+                p4.append(f"Avg Vol 20D: {vs}")
+        if vol_ratio is not None:
+            p4.append(f"Vol Ratio: {vol_ratio:.2f}x")
+        if p4:
+            L.append(" | ".join(p4))
+
+        # Next Earnings
+        ne = tech.get("next_earnings")
+        if ne:
+            L.append(f"Next Earnings: {ne}")
+
+        # Financials
         r1 = []
         rv = _fmt_money(fin.get("revenue_ttm"))
         if rv:
@@ -1285,7 +1361,6 @@ def format_dual_output_v2(data: dict) -> str:
             r1.append(f"Rev Growth YoY: {fin['revenue_growth_yoy']}")
         if r1:
             L.append(" | ".join(r1))
-
         r2 = []
         ni = _fmt_money(fin.get("net_income_ttm"))
         if ni:
@@ -1293,11 +1368,8 @@ def format_dual_output_v2(data: dict) -> str:
         nm = fin.get("net_margin")
         if nm is not None:
             r2.append(f"Net Margin: {nm*100:.1f}%")
-        elif fin.get("operating_margin") is not None:
-            r2.append(f"Op Margin: {fin['operating_margin']*100:.1f}%")
         if r2:
             L.append(" | ".join(r2))
-
         r3 = []
         if val.get("pe_ratio") is not None:
             r3.append(f"P/E: {val['pe_ratio']:.1f}")
@@ -1308,18 +1380,80 @@ def format_dual_output_v2(data: dict) -> str:
         if r3:
             L.append(" | ".join(r3))
 
-        r4 = []
-        if val.get("ev_to_ebitda") is not None:
-            r4.append(f"EV/EBITDA: {val['ev_to_ebitda']:.1f}")
-        if val.get("ps_ratio") is not None:
-            r4.append(f"P/S: {val['ps_ratio']:.1f}")
-        if r4:
-            L.append(" | ".join(r4))
+    elif et == "crypto":
+        # Token price + changes
+        n1 = []
+        tp = crypto.get("token_price")
+        if tp is not None:
+            try:
+                n1.append(f"Token Price: ${float(tp):,.4f}" if float(tp) < 1 else f"Token Price: ${float(tp):,.2f}")
+            except Exception:
+                n1.append(f"Token Price: ${tp}")
+        c24h = crypto.get("price_change_24h")
+        if c24h is not None:
+            try:
+                n1.append(f"24h Change: {'+' if float(c24h) >= 0 else ''}{float(c24h):.1f}%")
+            except Exception:
+                pass
+        c30d = crypto.get("price_change_30d")
+        if c30d is not None:
+            try:
+                n1.append(f"30D Change: {'+' if float(c30d) >= 0 else ''}{float(c30d):.1f}%")
+            except Exception:
+                pass
+        if n1:
+            L.append(" | ".join(n1))
+        # Market cap + FDV + volume
+        n2 = []
+        mc = _fmt_money(crypto.get("market_cap"))
+        if mc:
+            n2.append(f"Market Cap: {mc}")
+        vol24h = _fmt_money(crypto.get("volume_24h"))
+        if vol24h:
+            n2.append(f"24h Volume: {vol24h}")
+        if n2:
+            L.append(" | ".join(n2))
+        # TVL + MCap/TVL
+        n3 = []
+        tvl_val = _fmt_money(crypto.get("tvl"))
+        if tvl_val:
+            n3.append(f"TVL: {tvl_val}")
+        mcap_tvl = crypto.get("mcap_tvl_ratio")
+        if mcap_tvl is not None:
+            try:
+                n3.append(f"MCap/TVL: {float(mcap_tvl):.3f}")
+            except Exception:
+                pass
+        if n3:
+            L.append(" | ".join(n3))
 
-        L.append("")
+    elif et in ("venture_capital", "private_or_unlisted", "foundation"):
+        n1 = []
+        if vc.get("aum"):
+            n1.append(f"AUM: {vc['aum']}")
+        if vc.get("total_investments") is not None:
+            n1.append(f"Total Investments: {vc['total_investments']}")
+        if n1:
+            L.append(" | ".join(n1))
+        if vc.get("last_fund"):
+            fund_str = vc["last_fund"]
+            if vc.get("last_fund_size"):
+                fund_str += f" ({vc['last_fund_size']})"
+            L.append(f"Last Fund: {fund_str}")
+        portfolio = vc.get("notable_portfolio") or []
+        if portfolio:
+            L.append(f"Notable Portfolio: {', '.join(str(p) for p in portfolio[:5])}")
 
-    # ── Peers ───────────────────────────────────────────────────────────────
-    if peers:
+    elif et == "defunct":
+        if defunct_info.get("peak_valuation"):
+            L.append(f"Peak Valuation: {_fmt_money(defunct_info['peak_valuation'])}")
+        if defunct_info.get("creditor_recovery_pct") is not None:
+            L.append(f"Creditor Recovery: ~{defunct_info['creditor_recovery_pct']}% of claims")
+
+    L.append("")
+
+    # ── Section 3: PEERS ────────────────────────────────────────────────────
+    if peers and et == "public_equity":
         L.append("## PEERS")
         L.append("| Company | P/E | Rev Growth | Margin | RSI-14 |")
         L.append("|---------|-----|-----------|--------|--------|")
@@ -1331,21 +1465,62 @@ def format_dual_output_v2(data: dict) -> str:
             p_rsi = f"{p['rsi_14']:.1f}" if p.get("rsi_14") is not None else "N/A"
             L.append(f"| {p_name} | {p_pe} | {p_rg} | {p_margin} | {p_rsi} |")
         L.append("")
+    elif et != "defunct":
+        L.append("## PEERS")
+        # For crypto/private: no live peer data — just note comparables if we had them
+        L.append("")
 
-    # ── Recent News ─────────────────────────────────────────────────────────
-    if news:
-        L.append("## RECENT NEWS")
-        for n in news[:8]:
+    # ── Section 4: RECENT ───────────────────────────────────────────────────
+    L.append("## RECENT")
+    if recent_news:
+        for n in recent_news[:5]:
             date_str = (n.get("date") or "")[:10]
             summary = n.get("summary", "")
             L.append(f"- [{date_str}] {summary}")
-        L.append("")
+    else:
+        L.append("- Insufficient data")
+    # Append entity_context as Context: lines
+    if entity_context:
+        ctx_str = " ".join(str(c) for c in entity_context[:3])
+        L.append(f"Context: {ctx_str}")
+    L.append("")
 
-    # ── Analysis Hooks ──────────────────────────────────────────────────────
-    if hooks:
-        L.append("## ANALYSIS HOOKS")
-        for h in hooks:
-            L.append(f"- {h}")
+    # ── Section 5: FORWARD ──────────────────────────────────────────────────
+    L.append("## FORWARD")
+    if forward_looking:
+        for item in forward_looking[:3]:
+            L.append(f"- {item}")
+    else:
+        L.append("- Insufficient data")
+    L.append("")
+
+    # ── Section 6: VERDICT ──────────────────────────────────────────────────
+    if verdict_v2:
+        L.append("## Verdict")
+        one_line = verdict_v2.get("one_line", "")
+        stance = verdict_v2.get("stance", "")
+        confidence = verdict_v2.get("confidence", "")
+        bull = verdict_v2.get("bull_case", "")
+        bear = verdict_v2.get("bear_case", "")
+        wait_for = verdict_v2.get("wait_for", "")
+        action = verdict_v2.get("action", "")
+        header = f"**{one_line}**"
+        if stance or confidence:
+            badge_parts = []
+            if stance:
+                badge_parts.append(stance)
+            if confidence:
+                badge_parts.append(f"{confidence} confidence")
+            header += f" ({' | '.join(badge_parts)})"
+        L.append(header)
+        if bull:
+            L.append(f"🟢 {bull}")
+        if bear:
+            L.append(f"🔴 {bear}")
+        if wait_for:
+            L.append(f"⏳ {wait_for}")
+        if action:
+            L.append(f"▶ {action}")
         L.append("")
 
     # ── Footer ──────────────────────────────────────────────────────────────
