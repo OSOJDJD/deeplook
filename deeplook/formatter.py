@@ -641,6 +641,82 @@ def format_layer1(data: dict, bold_mode: str = "ansi") -> None:
     print()
 
 
+def format_lookup_markdown(data: dict) -> str:
+    """Compact markdown snapshot for deeplook_lookup — works with v2 and v1 pipeline output."""
+    is_v2 = data.get("_version") == "2.0"
+
+    if is_v2:
+        sd = data.get("structured_data") or {}
+        cm = data.get("compressed") or {}
+        vd = cm.get("verdict") or {}
+        price_info = sd.get("price") or {}
+        company_meta = sd.get("company_meta") or {}
+
+        company = data.get("company", "Unknown")
+        ticker = data.get("ticker") or ""
+        ticker_str = f" ({ticker})" if ticker else ""
+        price = price_info.get("current")
+        mcap = price_info.get("market_cap") or ""
+        sector = company_meta.get("sector") or ""
+        industry = company_meta.get("industry") or sector
+
+        one_line = vd.get("one_line") or ""
+        bull = vd.get("bull_case") or ""
+        bear = vd.get("bear_case") or ""
+        wait_for = vd.get("wait_for") or ""
+        confidence = vd.get("confidence") or ""
+    else:
+        # v1 fallback
+        j = data.get("judgment", data)
+        ai = j.get("ai_judgment", {})
+        vd = ai.get("verdict", {})
+        market = j.get("market_data", {})
+        overview = j.get("overview", {})
+
+        company = j.get("company_name") or data.get("company", "Unknown")
+        yf_d = ((data.get("fetcher_results") or {}).get("yfinance") or {}).get("data") or {}
+        ticker = yf_d.get("symbol") or overview.get("stage", "")
+        ticker_str = f" ({ticker})" if ticker and ticker.upper() != company.upper() else ""
+        price = market.get("price")
+        mcap = market.get("market_cap") or ""
+        sector = overview.get("sector") or ""
+        industry = sector
+
+        one_line = vd.get("one_line") or ""
+        bull = vd.get("bull_case") or ""
+        bear = vd.get("bear_case") or ""
+        wait_for = vd.get("wait_for") or ""
+        confidence = vd.get("confidence") or ""
+
+    price_str = f"${price}" if price is not None else "—"
+    mcap_str = f"MCap {mcap}" if mcap else ""
+    header_right = " | ".join(p for p in [price_str, mcap_str] if p)
+    line1 = f"**{company}{ticker_str}** — {header_right}" if header_right else f"**{company}{ticker_str}**"
+
+    sources = len(data.get("sources_succeeded") or [])
+    elapsed = data.get("elapsed_seconds", "?")
+    footer = " | ".join(p for p in [
+        f"Confidence: {confidence}" if confidence else "",
+        f"{sources} sources" if sources else "",
+        f"{elapsed}s" if elapsed != "?" else "",
+    ] if p)
+
+    lines = [line1]
+    if industry:
+        lines.append(industry)
+    if not _is_empty(one_line):
+        lines.append(f"Verdict: {one_line}")
+    if not _is_empty(bull):
+        lines.append(f"🟢 Bull: {bull}")
+    if not _is_empty(bear):
+        lines.append(f"🔴 Bear: {bear}")
+    if not _is_empty(wait_for):
+        lines.append(f"⏳ Wait: {wait_for}")
+    if footer:
+        lines.append(footer)
+
+    return "\n".join(lines)
+
 
 # ── Structured JSON + Dual Output ─────────────────────────────────────────
 
@@ -1001,15 +1077,7 @@ def build_structured_json_v2(data: dict) -> dict:
     segments = sd.get("segments") or []
     funding = sd.get("funding") or {}
 
-    meta_overview = {}
-    try:
-        yfd = ((data.get("fetcher_results") or {}).get("yfinance") or {}).get("data") or {}
-        for attr, key in [("ceo_name", "ceo"), ("hq_location", "hq"), ("founded", "founded"), ("fullTimeEmployees", "team_size"), ("sector", "sector")]:
-            v = yfd.get(attr)
-            if v:
-                meta_overview[key] = v
-    except Exception:
-        pass
+    meta_overview = sd.get("company_meta") or {}
 
     return {
         "version": "2.0",

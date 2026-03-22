@@ -32,7 +32,7 @@ _FAVICON_ICO = _load_static("favicon.ico")
 _FAVICON_PNG = _load_static("favicon-64.png")
 
 from deeplook.research import run_research  # noqa: E402
-from deeplook.formatter import format_report, format_layer1, format_dual_output  # noqa: E402
+from deeplook.formatter import format_report, format_layer1, format_dual_output, format_lookup_markdown  # noqa: E402
 from deeplook.rate_limiter import RateLimiter, client_ip_var, add_to_waitlist  # noqa: E402
 
 _rate_limiter = RateLimiter()
@@ -427,10 +427,7 @@ async def deeplook_lookup(company_name: str) -> str:
         company_name, duration,
     )
 
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        format_layer1(data, bold_mode="markdown")
-    return buf.getvalue().strip()
+    return format_lookup_markdown(data)
 
 
 def main():

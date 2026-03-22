@@ -594,6 +594,12 @@ def _get_peer_tickers(fetcher_results: dict, main_ticker: str | None) -> list[st
         if main and main in MEGA_CAP_PEERS:
             return MEGA_CAP_PEERS[main][:3]
 
+        # Fallback: read ticker from yfinance data if caller didn't resolve it
+        if not main:
+            main = (data.get("symbol") or "").upper()
+            if main and main in MEGA_CAP_PEERS:
+                return MEGA_CAP_PEERS[main][:3]
+
         # 2. Industry fallback with market cap filter
         industry = data.get("industry", "")
         sector = data.get("sector", "")
@@ -904,6 +910,26 @@ def _extract_funding(r1_data: dict, entity_type: str) -> dict:
     return {}
 
 
+def _extract_company_meta(fetcher_results: dict) -> dict:
+    """Extract company metadata (sector, industry, hq, ceo, team_size) from yfinance data."""
+    meta: dict = {}
+    try:
+        yfd = ((fetcher_results.get("yfinance") or {}).get("data") or {})
+        if yfd.get("sector"):
+            meta["sector"] = yfd["sector"]
+        if yfd.get("industry"):
+            meta["industry"] = yfd["industry"]
+        # yfinance fetcher stores CEO as ceo_name (pre-extracted from companyOfficers)
+        if yfd.get("ceo_name"):
+            meta["ceo"] = yfd["ceo_name"]
+        # employees stored as "employees" key by the yfinance fetcher
+        if yfd.get("employees"):
+            meta["team_size"] = yfd["employees"]
+    except Exception as e:
+        print(f"[v2] _extract_company_meta failed: {e}")
+    return meta
+
+
 def prepare_structured_data(
     company_name: str,
     entity_type: str,
@@ -931,6 +957,7 @@ def prepare_structured_data(
         "guidance": _extract_guidance(r1_data, entity_type),
         "segments": _extract_segments(r1_data, entity_type),
         "funding": _extract_funding(r1_data, entity_type),
+        "company_meta": _extract_company_meta(fetcher_results),
     }
 
 
