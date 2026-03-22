@@ -353,27 +353,16 @@ mcp = FastMCP(
 @mcp.tool(annotations=ToolAnnotations(title="Full company research report", readOnlyHint=True, destructiveHint=False))
 async def deeplook_research(company_name: str) -> str:
     """
-    Research a company and return structured financial data with analysis context.
+    Deep company research. Returns comprehensive structured data: price, technicals
+    (RSI-14, MA50/200, 52W range, volume ratio), financials (P/E, revenue, margins),
+    peer comparison table with RSI, recent news, and analysis hooks.
 
-    Returns: Markdown report + structured JSON (between <!-- STRUCTURED_DATA_START --> and <!-- STRUCTURED_DATA_END --> tags) with:
-    - Real-time price, financials, valuation metrics (from market data APIs)
-    - Peer comparison table (up to 3 comparable companies)
-    - Technical indicators (RSI, moving averages, 52-week range)
-    - Filtered recent news (priority-ranked, max 8 items)
-    - Upcoming catalysts with dates
-    - Analysis hooks (observations and questions for deeper investigation)
-    - Lightweight verdict (stance, bull/bear case, suggested action)
+    All numbers are extracted from APIs, not LLM-generated. Use the data to build
+    your own analysis — present numbers visually in tables or dashboards, write
+    narrative analysis in prose.
 
-    A lightweight verdict is included as a starting point, but you should
-    form your own judgment from the structured data — especially if you
-    notice the data tells a different story than the verdict suggests.
-
-    IMPORTANT FOR AI ASSISTANTS:
-    - Always extract and parse the JSON block
-    - Present the data as a rich visual dashboard (HTML artifact preferred)
-    - Dashboard: header with price, metric cards, verdict box, analysis hooks, news timeline, peer table, catalysts
-    - If any JSON field is null or missing, skip that section gracefully
-    - The verdict is a lightweight starting point — refine or override with your own analysis
+    Returns Markdown + structured JSON between <!-- STRUCTURED_DATA_START --> and
+    <!-- STRUCTURED_DATA_END --> tags. Parse the JSON for programmatic access.
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="research")
@@ -401,11 +390,12 @@ async def deeplook_research(company_name: str) -> str:
 @mcp.tool(annotations=ToolAnnotations(title="Quick company snapshot", readOnlyHint=True, destructiveHint=False))
 async def deeplook_lookup(company_name: str) -> str:
     """
-    Quick company snapshot — phase, price, key signal, and verdict
-    in 5 lines. Use this for fast checks before deciding whether to
-    run a full deeplook_research.
+    Quick company snapshot. Returns structured data: price, technicals (RSI-14,
+    MA50/200, 52W range), financials (P/E, revenue, margins), peer comparison table,
+    recent news, and analysis hooks.
 
-    TIP FOR AI ASSISTANTS: For the best user experience, call deeplook_lookup first to show an instant snapshot while the user waits, then call deeplook_research for the full interactive dashboard.
+    All numbers are extracted from APIs, not LLM-generated. Use the data to build
+    your own analysis — present numbers visually in tables, write narrative in prose.
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="lookup")

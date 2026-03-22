@@ -654,6 +654,66 @@ def _build_technical_snapshot(yf_data: dict) -> dict | None:
 
 # ── v2 Code Processing Layer ───────────────────────────────────────────────
 
+def _calculate_rsi(closes: list, period: int = 14) -> float | None:
+    """Standard RSI calculation from list of closing prices. Returns None if insufficient data."""
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def _fetch_rsi_for_ticker(ticker: str) -> float | None:
+    """Fetch 1mo history for a peer ticker and compute RSI-14."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="1mo", timeout=10)
+        if hist.empty or len(hist) < 15:
+            return None
+        return _calculate_rsi(hist["Close"].tolist())
+    except Exception:
+        return None
+
+
+def _fetch_history_metrics(ticker: str) -> dict:
+    """Fetch 3mo history and compute change_1d, change_30d, volume metrics."""
+    result = {}
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="3mo", timeout=10)
+        if hist.empty or len(hist) < 2:
+            return result
+        closes = hist["Close"].tolist()
+        volumes = hist["Volume"].tolist()
+        try:
+            result["change_1d"] = round((closes[-1] - closes[-2]) / closes[-2] * 100, 1)
+        except Exception:
+            pass
+        try:
+            if len(closes) >= 22:
+                result["change_30d"] = round((closes[-1] - closes[-22]) / closes[-22] * 100, 1)
+        except Exception:
+            pass
+        try:
+            if len(volumes) >= 20:
+                avg = sum(volumes[-20:]) / 20
+                result["volume"] = volumes[-1]
+                result["avg_volume_20d"] = avg
+                if avg > 0:
+                    result["volume_ratio"] = round(volumes[-1] / avg, 2)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[v2] _fetch_history_metrics({ticker}) failed: {e}")
+    return result
+
+
 def _truncate(text: str, max_chars: int) -> str:
     if not text:
         return ""
@@ -738,6 +798,8 @@ def _extract_financials(r1_data: dict, entity_type: str) -> dict:
                 "earnings_growth": _format_pct(yfd.get("earnings_growth") or yfd.get("earningsGrowth")),
                 "gross_margin": _safe_float(yfd.get("grossMargins")),
                 "operating_margin": _safe_float(yfd.get("operating_margins") or yfd.get("operatingMargins")),
+                "net_margin": _safe_float(yfd.get("profitMargins")),
+                "net_income_ttm": _safe_float(yfd.get("netIncomeToCommon")),
                 "fcf": _format_currency(yfd.get("free_cashflow") or yfd.get("freeCashflow")),
                 "revenue_ttm": _safe_float(yfd.get("total_revenue") or yfd.get("totalRevenue")),
             }
@@ -757,6 +819,7 @@ def _extract_valuation(r1_data: dict, entity_type: str) -> dict:
             yfd = (r1_data.get("yfinance") or {}).get("data") or {}
             return {
                 "pe_ratio": _safe_float(yfd.get("trailingPE")),
+                "fwd_pe_ratio": _safe_float(yfd.get("forwardPE")),
                 "peg_ratio": _safe_float(yfd.get("peg_ratio") or yfd.get("pegRatio")),
                 "ps_ratio": _safe_float(yfd.get("priceToSalesTrailing12Months")),
                 "ev_to_ebitda": _safe_float(yfd.get("enterprise_to_ebitda") or yfd.get("enterpriseToEbitda")),
@@ -777,38 +840,53 @@ def _extract_valuation(r1_data: dict, entity_type: str) -> dict:
 
 
 def _format_technical_snapshot_v2(technical: dict | None) -> dict:
+    """Format enriched technical snapshot dict. Input is the technical_snapshot dict
+    (from _build_technical_snapshot), optionally enriched by _fetch_history_metrics."""
     if not technical:
         return {}
+    result = {}
     try:
-        rsi = _safe_float(technical.get("rsi14"))
         price = _safe_float(technical.get("price"))
+        h52 = _safe_float(technical.get("52w_high"))
+        l52 = _safe_float(technical.get("52w_low"))
         ma50 = _safe_float(technical.get("50d_ma"))
         ma200 = _safe_float(technical.get("200d_ma"))
-        signals = []
-        if rsi is not None:
-            if rsi > 70:
-                signals.append("overbought")
-            elif rsi < 30:
-                signals.append("oversold")
-        if price is not None and ma50 is not None and ma200 is not None:
-            if price < ma50 and price < ma200:
-                signals.append("below_both_ma")
-            elif price > ma50 and price > ma200:
-                signals.append("above_both_ma")
-        if ma50 is not None and ma200 is not None:
-            signals.append("golden_cross" if ma50 > ma200 else "death_cross")
-        return {
-            "rsi_14": rsi,
-            "ma_50d": ma50,
-            "ma_200d": ma200,
-            "52w_high": _safe_float(technical.get("52w_high")),
-            "52w_low": _safe_float(technical.get("52w_low")),
-            "pct_from_high": _safe_float(technical.get("pct_from_high")),
-            "signals": signals,
-        }
+        rsi = _safe_float(technical.get("rsi14"))
+
+        result["rsi_14"] = rsi
+        result["high_52w"] = h52
+        result["low_52w"] = l52
+
+        try:
+            if price is not None and h52 is not None and l52 is not None and h52 != l52:
+                result["position_52w_pct"] = round((price - l52) / (h52 - l52) * 100, 1)
+        except Exception as e:
+            print(f"[v2] 52W position failed: {e}")
+
+        try:
+            if ma50 is not None and price is not None:
+                result["ma50"] = ma50
+                result["ma50_signal"] = "above" if price > ma50 else "below"
+                result["ma50_distance_pct"] = round((price - ma50) / ma50 * 100, 1)
+        except Exception as e:
+            print(f"[v2] MA50 format failed: {e}")
+
+        try:
+            if ma200 is not None and price is not None:
+                result["ma200"] = ma200
+                result["ma200_signal"] = "above" if price > ma200 else "below"
+                result["ma200_distance_pct"] = round((price - ma200) / ma200 * 100, 1)
+        except Exception as e:
+            print(f"[v2] MA200 format failed: {e}")
+
+        # History-enriched fields added by _fetch_history_metrics in run_research
+        for key in ("change_1d", "change_30d", "volume", "avg_volume_20d", "volume_ratio"):
+            if technical.get(key) is not None:
+                result[key] = technical[key]
+
     except Exception as e:
         print(f"[v2] _format_technical_snapshot_v2 failed: {e}")
-    return {}
+    return result
 
 
 def _format_peer_table(peer_data: list) -> list:
@@ -824,6 +902,7 @@ def _format_peer_table(peer_data: list) -> list:
                 "ps": _safe_float(p.get("priceToSalesTrailing12Months")),
                 "rev_growth_pct": _safe_float(p.get("revenueGrowth")),
                 "gross_margin_pct": _safe_float(p.get("grossMargins")),
+                "rsi_14": p.get("rsi_14"),  # enriched async in run_research (v2 only)
             })
         except Exception as e:
             print(f"[v2] peer row failed: {e}")
@@ -1195,6 +1274,40 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
     }
 
     _timing["total_wall"] = round(time.time() - t0, 2)
+
+    # ── v2: Async history enrichment + peer RSI (before code processing) ──
+    # Fallback: if ticker wasn't resolved upfront (e.g. "Apple"), get it from yfinance data
+    if _pipeline_v2 and entity_type == "public_equity" and resolved_ticker is None:
+        _yf_sym = ((fetcher_results.get("yfinance") or {}).get("data") or {}).get("symbol")
+        if _yf_sym:
+            resolved_ticker = _yf_sym
+            print(f"[v2] resolved ticker from yfinance data: {_yf_sym}")
+
+    if _pipeline_v2 and entity_type == "public_equity" and resolved_ticker:
+        if technical_snapshot is not None:
+            try:
+                _extra = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_history_metrics, resolved_ticker),
+                    timeout=10.0,
+                )
+                technical_snapshot.update(_extra)
+                print(f"[v2] history enrich: change_1d={_extra.get('change_1d')} change_30d={_extra.get('change_30d')} vol_ratio={_extra.get('volume_ratio')}")
+            except Exception as _e:
+                print(f"[v2] history enrich failed: {_e}")
+
+        if peer_comparison:
+            async def _add_peer_rsi(p):
+                _t = p.get("ticker")
+                if not _t:
+                    return
+                try:
+                    p["rsi_14"] = await asyncio.wait_for(
+                        asyncio.to_thread(_fetch_rsi_for_ticker, _t), timeout=8.0
+                    )
+                except Exception:
+                    p["rsi_14"] = None
+            await asyncio.gather(*[_add_peer_rsi(p) for p in peer_comparison])
+            print(f"[v2] peer RSI: {[(p.get('ticker'), p.get('rsi_14')) for p in peer_comparison]}")
 
     if _pipeline_v2:
         # ── v2: Code Processing Layer + Haiku Compress ────────────────────

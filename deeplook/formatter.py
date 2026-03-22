@@ -1034,14 +1034,7 @@ def build_structured_json_v2(data: dict) -> dict:
     """Assemble clean v2 JSON schema from v2 pipeline output."""
     sd = data.get("structured_data") or {}
     cm = data.get("compressed") or {}
-    vd = (cm.get("verdict") or {})
     et = data.get("entity_type", "") or sd.get("entity_type", "")
-
-    def _safe(fn, default=None):
-        try:
-            return fn()
-        except Exception:
-            return default
 
     peers = []
     for p in (sd.get("peers") or []):
@@ -1055,6 +1048,7 @@ def build_structured_json_v2(data: dict) -> dict:
                 "ps": p.get("ps"),
                 "rev_growth_pct": p.get("rev_growth_pct"),
                 "gross_margin_pct": p.get("gross_margin_pct"),
+                "rsi_14": p.get("rsi_14"),
             })
         except Exception:
             pass
@@ -1064,19 +1058,12 @@ def build_structured_json_v2(data: dict) -> dict:
         for n in (cm.get("news_bullets") or [])
     ]
 
-    catalysts = []
-    earnings = sd.get("earnings") or {}
-    if earnings.get("next_earnings_date"):
-        catalysts.append({"date": str(earnings["next_earnings_date"]), "event": "Earnings release", "why_it_matters": "Revenue/EPS vs estimates"})
-
     price_info = sd.get("price") or {}
     financials = sd.get("financials") or {}
     valuation = sd.get("valuation") or {}
-    technicals = sd.get("technicals") or {}
-    guidance = sd.get("guidance") or {}
-    segments = sd.get("segments") or []
+    technicals_raw = sd.get("technicals") or {}
+    earnings = sd.get("earnings") or {}
     funding = sd.get("funding") or {}
-
     meta_overview = sd.get("company_meta") or {}
 
     return {
@@ -1085,10 +1072,10 @@ def build_structured_json_v2(data: dict) -> dict:
         "ticker": data.get("ticker"),
         "entity_type": et,
         "research_date": sd.get("research_date", ""),
-        "overview": cm.get("overview", ""),
         "price": {
             "current": price_info.get("current"),
-            "change_30d": price_info.get("change_30d"),
+            "change_1d": technicals_raw.get("change_1d"),
+            "change_30d": technicals_raw.get("change_30d"),
             "market_cap": price_info.get("market_cap"),
             "currency": price_info.get("currency", "USD"),
         },
@@ -1098,33 +1085,37 @@ def build_structured_json_v2(data: dict) -> dict:
             "earnings_growth_yoy": financials.get("earnings_growth"),
             "gross_margin": financials.get("gross_margin"),
             "operating_margin": financials.get("operating_margin"),
+            "net_margin": financials.get("net_margin"),
+            "net_income_ttm": financials.get("net_income_ttm"),
             "fcf_ttm": financials.get("fcf"),
         },
         "valuation": valuation,
-        "technicals": technicals,
+        "technicals": {
+            "rsi_14": technicals_raw.get("rsi_14"),
+            "ma50": technicals_raw.get("ma50"),
+            "ma50_signal": technicals_raw.get("ma50_signal"),
+            "ma50_distance_pct": technicals_raw.get("ma50_distance_pct"),
+            "ma200": technicals_raw.get("ma200"),
+            "ma200_signal": technicals_raw.get("ma200_signal"),
+            "ma200_distance_pct": technicals_raw.get("ma200_distance_pct"),
+            "high_52w": technicals_raw.get("high_52w"),
+            "low_52w": technicals_raw.get("low_52w"),
+            "position_52w_pct": technicals_raw.get("position_52w_pct"),
+            "volume": technicals_raw.get("volume"),
+            "avg_volume_20d": technicals_raw.get("avg_volume_20d"),
+            "volume_ratio": technicals_raw.get("volume_ratio"),
+            "next_earnings": str(earnings.get("next_earnings_date"))[:10] if earnings.get("next_earnings_date") else None,
+        },
         "peers": peers,
         "news": news,
-        "catalysts": catalysts,
-        "guidance": guidance,
-        "segments": segments,
-        "funding": funding if et not in ("public_equity",) else {},
         "analysis_hooks": cm.get("analysis_hooks", []),
-        "verdict": {
-            "one_line": vd.get("one_line"),
-            "stance": vd.get("stance"),
-            "bull_case": vd.get("bull_case"),
-            "bear_case": vd.get("bear_case"),
-            "wait_for": vd.get("wait_for"),
-            "action": vd.get("action"),
-            "confidence": vd.get("confidence"),
-        },
+        "funding": funding if et not in ("public_equity",) else {},
         "meta": {
-            "overview": meta_overview,
+            "company_meta": meta_overview,
             "sources_ok": len(data.get("sources_succeeded", [])),
             "sources_failed": len(data.get("sources_failed", [])),
             "sources_list": data.get("sources_succeeded", []),
             "generation_time_sec": data.get("elapsed_seconds"),
-            "llm_calls": 2,
             "version": "2.0",
         },
     }
@@ -1133,12 +1124,11 @@ def build_structured_json_v2(data: dict) -> dict:
 def format_dual_output_v2(data: dict) -> str:
     """v2 pipeline markdown + structured JSON output."""
     import json as _json
-    import os as _os
 
-    sd = data.get("structured_data") or {}
-    cm = data.get("compressed") or {}
     structured = build_structured_json_v2(data)
-    vd = structured.get("verdict") or {}
+    company = structured.get("company", "")
+    ticker = structured.get("ticker") or ""
+    ticker_str = f" ({ticker})" if ticker else ""
     price_info = structured.get("price") or {}
     fin = structured.get("financials") or {}
     val = structured.get("valuation") or {}
@@ -1146,183 +1136,227 @@ def format_dual_output_v2(data: dict) -> str:
     peers = structured.get("peers") or []
     news = structured.get("news") or []
     hooks = structured.get("analysis_hooks") or []
-    catalysts = structured.get("catalysts") or []
-
-    company = structured.get("company", "")
-    ticker = structured.get("ticker") or ""
-    ticker_str = f" ({ticker})" if ticker else ""
-    price_str = f"${price_info.get('current')}" if price_info.get("current") else ""
-    sector = (structured.get("meta") or {}).get("overview", {}).get("sector", "")
-    header_parts = [p for p in [price_str, sector] if p]
-    header_line = f"# {company}{ticker_str}" + (f" — {' | '.join(header_parts)}" if header_parts else "")
+    meta = (structured.get("meta") or {}).get("company_meta") or {}
 
     L = []
-    # Frontmatter
-    L.append("---")
-    L.append(f"entity: {company}")
-    if ticker:
-        L.append(f"ticker: {ticker}")
-    L.append(f"entity_type: {structured.get('entity_type', '')}")
-    sources_ok = structured.get("meta", {}).get("sources_ok", 0)
-    sources_total = sources_ok + structured.get("meta", {}).get("sources_failed", 0)
-    L.append(f"data_quality: {sources_ok}/{sources_total}")
-    L.append(f"freshness: {structured.get('research_date', '')}")
-    L.append('version: "2.0"')
-    L.append(f"generation_time: {data.get('elapsed_seconds', '?')}s")
-    L.append("---")
+
+    # ── Company Header ──────────────────────────────────────────────────────
+    L.append(f"## {company}{ticker_str}")
+    meta_parts = []
+    if meta.get("sector"):
+        meta_parts.append(f"Sector: {meta['sector']}")
+    if meta.get("industry"):
+        meta_parts.append(f"Industry: {meta['industry']}")
+    if meta.get("team_size"):
+        ts = meta["team_size"]
+        meta_parts.append(f"Employees: {ts:,}" if isinstance(ts, int) else f"Employees: {ts}")
+    if meta_parts:
+        L.append(" | ".join(meta_parts))
+    ceo_parts = []
+    if meta.get("ceo"):
+        ceo_parts.append(f"CEO: {meta['ceo']}")
+    if price_info.get("market_cap"):
+        ceo_parts.append(f"Market Cap: {price_info['market_cap']}")
+    if ceo_parts:
+        L.append(" | ".join(ceo_parts))
     L.append("")
-    L.append(header_line)
+
+    # ── Price & Technicals ──────────────────────────────────────────────────
+    L.append("## PRICE & TECHNICALS")
+
+    # Line 1: Price, Change 1D, Change 30D
+    p1 = []
+    cur = price_info.get("current")
+    if cur is not None:
+        try:
+            p1.append(f"Price: ${float(cur):,.2f}")
+        except Exception:
+            p1.append(f"Price: ${cur}")
+    c1d = price_info.get("change_1d")  # stored in price section of JSON
+    if c1d is not None:
+        try:
+            p1.append(f"Change 1D: {'+' if float(c1d) >= 0 else ''}{float(c1d):.1f}%")
+        except Exception:
+            pass
+    c30d = price_info.get("change_30d")  # stored in price section of JSON
+    if c30d is not None:
+        try:
+            p1.append(f"Change 30D: {'+' if float(c30d) >= 0 else ''}{float(c30d):.1f}%")
+        except Exception:
+            pass
+    if p1:
+        L.append(" | ".join(p1))
+
+    # Line 2: 52W High/Low/Position
+    p2 = []
+    h52 = tech.get("high_52w")
+    l52 = tech.get("low_52w")
+    if h52 is not None:
+        p2.append(f"52W High: ${h52:,.2f}")
+    if l52 is not None:
+        p2.append(f"52W Low: ${l52:,.2f}")
+    pos52 = tech.get("position_52w_pct")
+    if pos52 is not None:
+        p2.append(f"52W Position: {pos52:.1f}%")
+    if p2:
+        L.append(" | ".join(p2))
+
+    # Line 3: RSI, MA50, MA200
+    p3 = []
+    rsi = tech.get("rsi_14")
+    if rsi is not None:
+        p3.append(f"RSI-14: {rsi:.1f}")
+    ma50 = tech.get("ma50")
+    if ma50 is not None:
+        sig = tech.get("ma50_signal", "")
+        dist = tech.get("ma50_distance_pct")
+        dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
+        p3.append(f"MA50: ${ma50:,.2f} ({sig}{dist_str})")
+    ma200 = tech.get("ma200")
+    if ma200 is not None:
+        sig = tech.get("ma200_signal", "")
+        dist = tech.get("ma200_distance_pct")
+        dist_str = f", {'+' if (dist or 0) >= 0 else ''}{dist:.1f}%" if dist is not None else ""
+        p3.append(f"MA200: ${ma200:,.2f} ({sig}{dist_str})")
+    if p3:
+        L.append(" | ".join(p3))
+
+    # Line 4: Volume
+    p4 = []
+    vol = tech.get("volume")
+    avg_vol = tech.get("avg_volume_20d")
+    vol_ratio = tech.get("volume_ratio")
+
+    def _fmt_vol(v):
+        if v is None:
+            return None
+        try:
+            v = float(v)
+            if v >= 1e6:
+                return f"{v/1e6:.1f}M"
+            elif v >= 1e3:
+                return f"{v/1e3:.0f}K"
+            return str(int(v))
+        except Exception:
+            return None
+
+    if vol is not None:
+        vs = _fmt_vol(vol)
+        if vs:
+            p4.append(f"Volume: {vs}")
+    if avg_vol is not None:
+        vs = _fmt_vol(avg_vol)
+        if vs:
+            p4.append(f"Avg Vol 20D: {vs}")
+    if vol_ratio is not None:
+        p4.append(f"Vol Ratio: {vol_ratio:.2f}x")
+    if p4:
+        L.append(" | ".join(p4))
+
+    # Next Earnings
+    ne = tech.get("next_earnings")
+    if ne:
+        L.append(f"Next Earnings: {ne}")
     L.append("")
 
-    # Overview
-    overview = cm.get("overview", "")
-    if overview:
-        L.append(overview)
+    # ── Financials ──────────────────────────────────────────────────────────
+    has_fin = any(fin.get(k) is not None for k in ("revenue_ttm", "revenue_growth_yoy", "operating_margin", "pe_ratio"))
+    if has_fin or val.get("pe_ratio") is not None:
+        L.append("## FINANCIALS")
+
+        def _fmt_money(v):
+            if v is None:
+                return None
+            try:
+                v = float(v)
+                if v >= 1e12:
+                    return f"${v/1e12:.1f}T"
+                elif v >= 1e9:
+                    return f"${v/1e9:.1f}B"
+                return f"${v/1e6:.1f}M"
+            except Exception:
+                return None
+
+        r1 = []
+        rv = _fmt_money(fin.get("revenue_ttm"))
+        if rv:
+            r1.append(f"Revenue TTM: {rv}")
+        if fin.get("revenue_growth_yoy"):
+            r1.append(f"Rev Growth YoY: {fin['revenue_growth_yoy']}")
+        if r1:
+            L.append(" | ".join(r1))
+
+        r2 = []
+        ni = _fmt_money(fin.get("net_income_ttm"))
+        if ni:
+            r2.append(f"Net Income TTM: {ni}")
+        nm = fin.get("net_margin")
+        if nm is not None:
+            r2.append(f"Net Margin: {nm*100:.1f}%")
+        elif fin.get("operating_margin") is not None:
+            r2.append(f"Op Margin: {fin['operating_margin']*100:.1f}%")
+        if r2:
+            L.append(" | ".join(r2))
+
+        r3 = []
+        if val.get("pe_ratio") is not None:
+            r3.append(f"P/E: {val['pe_ratio']:.1f}")
+        if val.get("fwd_pe_ratio") is not None:
+            r3.append(f"Fwd P/E: {val['fwd_pe_ratio']:.1f}")
+        if val.get("peg_ratio") is not None:
+            r3.append(f"PEG: {val['peg_ratio']:.2f}")
+        if r3:
+            L.append(" | ".join(r3))
+
+        r4 = []
+        if val.get("ev_to_ebitda") is not None:
+            r4.append(f"EV/EBITDA: {val['ev_to_ebitda']:.1f}")
+        if val.get("ps_ratio") is not None:
+            r4.append(f"P/S: {val['ps_ratio']:.1f}")
+        if r4:
+            L.append(" | ".join(r4))
+
         L.append("")
 
-    # Key Metrics table
-    rows = []
-    if fin.get("revenue_growth_yoy"):
-        rows.append(("Revenue Growth", fin["revenue_growth_yoy"], ""))
-    if fin.get("operating_margin") is not None:
-        rows.append(("Operating Margin", f"{fin['operating_margin']*100:.1f}%", ""))
-    if val.get("pe_ratio") is not None:
-        rows.append(("P/E Ratio", f"{val['pe_ratio']:.1f}x", ""))
-    if val.get("peg_ratio") is not None:
-        rows.append(("PEG Ratio", f"{val['peg_ratio']:.2f}", ""))
-    if fin.get("fcf_ttm"):
-        rows.append(("FCF", fin["fcf_ttm"], "TTM"))
-    if tech.get("rsi_14") is not None:
-        rsi_ctx = "neutral"
-        for sig in (tech.get("signals") or []):
-            if sig in ("overbought", "oversold"):
-                rsi_ctx = sig
-        rows.append(("RSI(14)", f"{tech['rsi_14']:.1f}", rsi_ctx))
-    if val.get("mcap_to_tvl") is not None:
-        rows.append(("Mcap/TVL", f"{val['mcap_to_tvl']:.2f}x", ""))
-    if rows:
-        L.append("## Key Metrics")
-        L.append("| Metric | Value | Context |")
-        L.append("|--------|-------|---------|")
-        for metric, value, ctx in rows:
-            L.append(f"| {metric} | {value} | {ctx} |")
-        L.append("")
-
-    # Recent Developments
-    if news:
-        L.append("## Recent Developments")
-        for n in news[:8]:
-            date_str = n.get("date", "")
-            summary = n.get("summary", "")
-            source = n.get("source", "")
-            L.append(f"- **{date_str}** — {summary} ({source})")
-        L.append("")
-
-    # Financial Detail
-    has_fin = any(v is not None for v in [fin.get("revenue_ttm"), fin.get("gross_margin"), fin.get("operating_margin")])
-    if has_fin:
-        L.append("## Financial Detail")
-        L.append("| | Value | YoY Change |")
-        L.append("|---|---|---|")
-        if fin.get("revenue_ttm") is not None:
-            L.append(f"| Revenue | — | {fin.get('revenue_growth_yoy', '—')} |")
-        if fin.get("gross_margin") is not None:
-            L.append(f"| Gross Margin | {fin['gross_margin']*100:.1f}% | — |")
-        if fin.get("operating_margin") is not None:
-            L.append(f"| Operating Margin | {fin['operating_margin']*100:.1f}% | — |")
-        if fin.get("fcf_ttm"):
-            L.append(f"| FCF | {fin['fcf_ttm']} | — |")
-        L.append("")
-
-    # Peer Comparison
+    # ── Peers ───────────────────────────────────────────────────────────────
     if peers:
-        L.append("## Competitive Position")
-        L.append("| Company | Price | Mkt Cap | P/E | P/S | Rev Growth |")
-        L.append("|---------|-------|---------|-----|-----|------------|")
-        # Target company row
-        price_val = price_info.get("current")
-        mcap_val = price_info.get("market_cap", "—")
-        pe_val = val.get("pe_ratio")
-        ps_val = val.get("ps_ratio")
-        rev_g = fin.get("revenue_growth_yoy", "—")
-        L.append(f"| **{company}{ticker_str}** | ${price_val or '—'} | {mcap_val} | {f'{pe_val:.1f}x' if pe_val else '—'} | {f'{ps_val:.1f}x' if ps_val else '—'} | {rev_g} |")
-        for p in peers[:3]:
-            p_pe = f"{p['pe']:.1f}x" if p.get("pe") else "—"
-            p_ps = f"{p['ps']:.1f}x" if p.get("ps") else "—"
-            p_rg = f"{p['rev_growth_pct']*100:+.1f}%" if p.get("rev_growth_pct") is not None else "—"
-            p_mc = f"${p['market_cap']/1e9:.0f}B" if p.get("market_cap") else "—"
-            L.append(f"| {p.get('name', p.get('ticker', ''))} | ${p.get('price', '—')} | {p_mc} | {p_pe} | {p_ps} | {p_rg} |")
+        L.append("## PEERS")
+        L.append("| Company | P/E | Rev Growth | Margin | RSI-14 |")
+        L.append("|---------|-----|-----------|--------|--------|")
+        for p in peers[:4]:
+            p_name = p.get("name") or p.get("ticker") or "—"
+            p_pe = f"{p['pe']:.1f}" if p.get("pe") is not None else "N/A"
+            p_rg = f"{p['rev_growth_pct']*100:+.1f}%" if p.get("rev_growth_pct") is not None else "N/A"
+            p_margin = f"{p['gross_margin_pct']*100:.1f}%" if p.get("gross_margin_pct") is not None else "N/A"
+            p_rsi = f"{p['rsi_14']:.1f}" if p.get("rsi_14") is not None else "N/A"
+            L.append(f"| {p_name} | {p_pe} | {p_rg} | {p_margin} | {p_rsi} |")
         L.append("")
 
-    # Upcoming Catalysts
-    if catalysts:
-        L.append("## Upcoming Catalysts")
-        for c in catalysts[:3]:
-            L.append(f"- **{c.get('date', 'TBD')}**: {c.get('event', '')} — {c.get('why_it_matters', '')}")
+    # ── Recent News ─────────────────────────────────────────────────────────
+    if news:
+        L.append("## RECENT NEWS")
+        for n in news[:8]:
+            date_str = (n.get("date") or "")[:10]
+            summary = n.get("summary", "")
+            L.append(f"- [{date_str}] {summary}")
         L.append("")
 
-    # Analysis Hooks
+    # ── Analysis Hooks ──────────────────────────────────────────────────────
     if hooks:
-        L.append("## Analysis Hooks")
+        L.append("## ANALYSIS HOOKS")
         for h in hooks:
             L.append(f"- {h}")
         L.append("")
 
-    # Verdict
-    ol = vd.get("one_line", "")
-    stance = vd.get("stance", "neutral")
-    confidence = vd.get("confidence", "")
-    if ol:
-        conf_str = f" | {confidence} confidence" if confidence else ""
-        L.append("## Verdict")
-        L.append(f"**{ol}** ({stance}{conf_str})")
-        if vd.get("bull_case"):
-            L.append(f"- 🟢 {vd['bull_case']}")
-        if vd.get("bear_case"):
-            L.append(f"- 🔴 {vd['bear_case']}")
-        if vd.get("wait_for"):
-            L.append(f"- ⏳ {vd['wait_for']}")
-        if vd.get("action"):
-            L.append(f"- ▶ Action: {vd['action']}")
-        L.append("")
-
-    # Footer
-    n_sources = structured.get("meta", {}).get("sources_ok", 0)
+    # ── Footer ──────────────────────────────────────────────────────────────
+    n_sources = (structured.get("meta") or {}).get("sources_ok", 0)
     elapsed = data.get("elapsed_seconds", "?")
-    L.append(f"*{n_sources} sources | {elapsed}s | DeepLook v2.0 — [github.com/OSOJDJD/deeplook](https://github.com/OSOJDJD/deeplook)*")
+    L.append(f"*{n_sources} sources | {elapsed}s | DeepLook v2.0*")
     L.append("")
 
     summary = "\n".join(L)
     json_str = _json.dumps(structured, ensure_ascii=False, indent=2, default=str)
-
-    # V2 display hint for AI assistants
-    display_hint = """<!-- DISPLAY_HINT:
-Build an HTML artifact dashboard with these sections in order:
-
-1. HEADER: Company name, ticker, price with 30d change. Sub-line: sector, research date.
-
-2. KEY METRICS ROW: Cards for Revenue Growth, Operating Margin, P/E, PEG, FCF, RSI. Use financials + valuation + technicals objects.
-
-3. VERDICT BOX: one_line in bold. Stance badge (green=bullish, red=bearish, grey=neutral). Bull case (green left border), Bear case (red left border), Wait for (amber left border). Action badge.
-
-4. ANALYSIS HOOKS: List of observation/question hooks for deeper investigation.
-
-5. NEWS TIMELINE: news array with colored dots (green=positive, red=negative, yellow=neutral) and dates.
-
-6. PEER TABLE: peers array — Name, Price, Market Cap, P/E, P/S, Rev Growth. Highlight target company.
-
-7. FINANCIAL DETAIL: financials object as compact table.
-
-8. CATALYSTS: catalysts array with dates.
-
-9. FOOTER: sources count, generation time, DeepLook v2.0 link.
-
-Style: Clean, professional. Light background cards with subtle borders. Monospace font for numbers.
-The verdict is a lightweight starting point — the AI reading this should form its own judgment from the structured data.
-If a section's data is null/empty, skip it entirely.
--->"""
-
-    return summary + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n\n" + display_hint
+    return summary + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n"
 
 
 def format_dual_output(data):
