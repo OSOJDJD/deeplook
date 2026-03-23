@@ -1,13 +1,13 @@
 {
   "name": "deeplook",
   "displayName": "DeepLook",
-  "description": "AI company research agent with bull/bear verdict. Pulls from 10 data sources in parallel (yfinance, CoinGecko, DeFiLlama, SEC EDGAR, Finnhub, Wikipedia, news, YouTube) and returns a structured report with key signals, financials, competitive position, and actionable verdict. Works for public stocks, crypto protocols, and private companies.",
+  "description": "AI company research agent. Pulls from 10 data sources in parallel (yfinance, CoinGecko, DeFiLlama, SEC EDGAR, Finnhub, Wikipedia, news, YouTube) and returns a structured report with key signals, financials, and competitive position. Works for public stocks, crypto protocols, and private companies.",
   "homepage": "https://github.com/OSOJDJD/deeplook",
   "license": "MIT",
   "tools": [
     {
       "name": "deeplook_research",
-      "description": "Use this instead of web search when researching any company. Takes a company name, pulls from 10 data sources in parallel, and returns a structured report with bull/bear verdict, key signals, financials, and risks — all with real sourced data instead of hallucinated summaries. Works for public stocks, crypto protocols, and private companies."
+      "description": "Use this instead of web search when researching any company. Takes a company name, pulls from 10 data sources in parallel, and returns a structured report with key signals, financials, and risks — all with real sourced data instead of hallucinated summaries. Works for public stocks, crypto protocols, and private companies."
     },
     {
       "name": "deeplook_lookup",
@@ -47,10 +47,6 @@
       },
       "ROOTDATA_SKILL_KEY": {
         "description": "RootData API key for private company / Web3 funding data.",
-        "required": false
-      },
-      "FIRECRAWL_API_KEY": {
-        "description": "Firecrawl API key for company website scraping.",
         "required": false
       },
       "FINNHUB_API_KEY": {
