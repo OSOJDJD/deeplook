@@ -54,7 +54,7 @@ cp .env.example .env
 ### What we look for
 
 - Does it make reports more accurate or faster?
-- Does it follow existing patterns? (check `deeplook/fetchers/`, `deeplook/synthesize.py`, `deeplook/formatter.py`)
+- Does it follow existing patterns? (check `deeplook/fetchers/`, `deeplook/judgment/synthesize.py`, `deeplook/formatter.py`)
 - Is the code straightforward? No unnecessary abstractions.
 
 ### What doesn't fit

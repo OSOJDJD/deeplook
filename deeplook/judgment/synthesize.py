@@ -1,17 +1,10 @@
 """
-judgment/synthesize.py — Four-stage LLM pipeline
+judgment/synthesize.py — Two-stage LLM pipeline (compress + judge)
 
-  Call 1 (extract)   — Haiku:   extract facts + format display fields
-  Call 2 (judge)     — Sonnet:  assess phase / momentum / risks
-  Call 3 (act)       — Haiku:   produce actionable verdict
-  Call 4 (validate)  — Sonnet:  sharpen verdict with stance + triggers
+  Call 1 (compress) — Haiku:  compress fetcher data into structured context
+  Call 2 (judge)    — Sonnet: assess signals, produce verdict with stance + triggers
 
-Model selection (Anthropic-first, falls back through OpenAI → Gemini → DeepSeek):
-  Override per-role via env vars:
-    DEEPLOOK_EXTRACT_MODEL    (default: claude-haiku-4-5-20251001)
-    DEEPLOOK_JUDGE_MODEL      (default: claude-sonnet-4-5-20250929)
-    DEEPLOOK_ACT_MODEL        (default: claude-sonnet-4-5-20250929)
-    DEEPLOOK_VALIDATE_MODEL   (default: claude-sonnet-4-5-20250929)
+  Model selection (Anthropic-first, falls back through OpenAI → Gemini → DeepSeek)
 """
 
 import os
@@ -90,7 +83,7 @@ def get_llm_response(
     prompt: str, system_prompt: str = None, model_role: str = "extract",
     temperature: float = 0, max_tokens: int = 4096,
 ) -> tuple[str, str, int]:
-    """Call LLM with model selected by role. Timeout: 10s per call.
+    """Call LLM with model selected by role. Timeout: 60s per call.
     Returns (response_text, model_name, tokens_used).
     Priority: Anthropic → OpenAI → Gemini → DeepSeek.
     """
@@ -1026,7 +1019,7 @@ def synthesize(
     total_time: float,
     api_call_count: int,
 ) -> dict:
-    """Run the four-stage pipeline: extract → judge → act → validate.
+    """Run the two-stage pipeline (compress + judge) via four sequential LLM calls.
     Returns formatter-compatible JSON.
     """
     total_tokens = 0

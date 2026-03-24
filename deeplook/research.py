@@ -1279,7 +1279,7 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
         fetcher_results["news"]["data"]["articles"] = filtered
         print(f"[strategy] news final: {len(filtered)} articles after dedup+rank+filter (threshold={_HIGH_PRI})")
 
-    _pipeline_v2 = os.environ.get("DEEPLOOK_PIPELINE_V2", "").lower() == "true"
+    _pipeline_v2 = os.environ.get("DEEPLOOK_PIPELINE_V2", "true").lower() != "false"
 
     # ── Round 2: LLM-guided follow-up search (v1 only) ─────────────────────
     if not _pipeline_v2:

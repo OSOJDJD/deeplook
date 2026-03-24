@@ -49,6 +49,8 @@ Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_conf
 }
 ```
 
+> Replace `ANTHROPIC_API_KEY` with your preferred provider key: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `DEEPSEEK_API_KEY`.
+
 CLI (no MCP):
 
 ```bash
@@ -89,7 +91,7 @@ Entity router → stock / crypto / private / VC / exchange / foundation / defunc
     ↓
 Code layer extracts all numbers from APIs (not LLM-generated)
     ↓
-2 LLM calls → search queries + news compression
+LLM compress + judge → verdict, signals, catalysts
     ↓
 Structured report (markdown + embedded JSON)
 ```
