@@ -2,8 +2,8 @@
 Cost protection for DeepLook MCP server.
 
 SQLite-backed per-IP daily limits:
-  - lookup:   5 per IP per day
-  - research: 2 per IP per day
+  - lookup:   100 per IP per day
+  - research: 50 per IP per day
 
 Resets at UTC 00:00.
 """
@@ -18,15 +18,15 @@ from datetime import datetime, timezone
 client_ip_var: ContextVar[str] = ContextVar("client_ip", default="unknown")
 
 # ── Config (env-overridable) ───────────────────────────────────────────────────
-DAILY_LOOKUP_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_LOOKUP_LIMIT", "20"))
-DAILY_RESEARCH_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_RESEARCH_LIMIT", "10"))
+DAILY_LOOKUP_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_LOOKUP_LIMIT", "100"))
+DAILY_RESEARCH_LIMIT: int = int(os.environ.get("DEEPLOOK_DAILY_RESEARCH_LIMIT", "50"))
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
 _DB_PATH = os.path.join(_DATA_DIR, "rate_limit.db")
 
 _LIMIT_REACHED_MSG = (
-    '{"error": "Daily free limit reached (5 lookups + 2 research reports per day). '
+    '{"error": "Daily free limit reached (100 lookups + 50 research reports per day). '
     'DeepLook Pro coming soon \u2014 go deeper. '
     'Join waitlist: https://deeplook.dev/waitlist"}'
 )
