@@ -27,7 +27,7 @@ from deeplook.fetchers.yfinance_data import fetch_yfinance, fetch_yfinance_news,
 from deeplook.fetchers.wikipedia import fetch_wikipedia
 from deeplook.fetchers.youtube import fetch_youtube
 from deeplook.fetchers.sec_edgar import fetch_sec_edgar
-from deeplook.fetchers.finnhub_fetcher import fetch_finnhub
+from deeplook.fetchers.finnhub_fetcher import fetch_finnhub, _get_client as _finnhub_get_client
 from deeplook.fetchers.search_strategy import (
     build_search_queries,
     get_active_fetchers,
@@ -151,34 +151,166 @@ DISAMBIGUATION = {
     # Preventive: common company names that could be mis-routed to crypto tokens
     "tesla": {
         "intended_type": "public_equity",
+        "ticker": "TSLA",
         "skip_yfinance": False,
         "note": "Tesla Inc (TSLA), EV and energy company",
     },
     "apple": {
         "intended_type": "public_equity",
+        "ticker": "AAPL",
         "skip_yfinance": False,
         "note": "Apple Inc (AAPL), consumer electronics",
     },
     "amazon": {
         "intended_type": "public_equity",
+        "ticker": "AMZN",
         "skip_yfinance": False,
         "note": "Amazon.com Inc (AMZN), e-commerce and cloud",
     },
     "meta": {
         "intended_type": "public_equity",
+        "ticker": "META",
         "skip_yfinance": False,
         "note": "Meta Platforms (META), social media",
     },
     "google": {
         "intended_type": "public_equity",
+        "ticker": "GOOGL",
         "skip_yfinance": False,
         "note": "Alphabet / Google (GOOGL), search and cloud",
     },
-    # TSMC: force public_equity path; fetch_yfinance will use TSM (ADR) via _TICKER_HARDCODED
     "tsmc": {
         "intended_type": "public_equity",
+        "ticker": "TSM",
         "skip_yfinance": False,
         "note": "TSMC (Taiwan Semiconductor) — use TSM ADR to avoid TWD currency mismatch",
+    },
+    # Semiconductor & tech companies — prevent misclassification when yfinance is flaky
+    "amd": {
+        "intended_type": "public_equity",
+        "ticker": "AMD",
+        "skip_yfinance": False,
+        "note": "Advanced Micro Devices (AMD), semiconductors",
+    },
+    "advanced micro devices": {
+        "intended_type": "public_equity",
+        "ticker": "AMD",
+        "skip_yfinance": False,
+        "note": "Advanced Micro Devices (AMD), semiconductors",
+    },
+    "broadcom": {
+        "intended_type": "public_equity",
+        "ticker": "AVGO",
+        "skip_yfinance": False,
+        "note": "Broadcom Inc (AVGO), semiconductors and infrastructure software",
+    },
+    "fabrinet": {
+        "intended_type": "public_equity",
+        "ticker": "FN",
+        "skip_yfinance": False,
+        "note": "Fabrinet (FN), optical packaging and precision manufacturing",
+    },
+    "marvell": {
+        "intended_type": "public_equity",
+        "ticker": "MRVL",
+        "skip_yfinance": False,
+        "note": "Marvell Technology (MRVL), semiconductors",
+    },
+    "marvell technology": {
+        "intended_type": "public_equity",
+        "ticker": "MRVL",
+        "skip_yfinance": False,
+        "note": "Marvell Technology (MRVL), semiconductors",
+    },
+    "lumentum": {
+        "intended_type": "public_equity",
+        "ticker": "LITE",
+        "skip_yfinance": False,
+        "note": "Lumentum Holdings (LITE), photonics and fiber optics",
+    },
+    "coherent": {
+        "intended_type": "public_equity",
+        "ticker": "COHR",
+        "skip_yfinance": False,
+        "note": "Coherent Corp (COHR), photonics and laser technology",
+    },
+    "coherent corp": {
+        "intended_type": "public_equity",
+        "ticker": "COHR",
+        "skip_yfinance": False,
+        "note": "Coherent Corp (COHR), photonics and laser technology",
+    },
+    "samsung": {
+        "intended_type": "public_equity",
+        "ticker": "005930.KS",
+        "skip_yfinance": False,
+        "note": "Samsung Electronics (005930.KS), KRX listed",
+    },
+    "samsung electronics": {
+        "intended_type": "public_equity",
+        "ticker": "005930.KS",
+        "skip_yfinance": False,
+        "note": "Samsung Electronics (005930.KS), KRX listed",
+    },
+    "vertiv": {
+        "intended_type": "public_equity",
+        "ticker": "VRT",
+        "skip_yfinance": False,
+        "note": "Vertiv Holdings (VRT), data center infrastructure",
+    },
+    "micron": {
+        "intended_type": "public_equity",
+        "ticker": "MU",
+        "skip_yfinance": False,
+        "note": "Micron Technology (MU), memory and storage semiconductors",
+    },
+    "micron technology": {
+        "intended_type": "public_equity",
+        "ticker": "MU",
+        "skip_yfinance": False,
+        "note": "Micron Technology (MU), memory and storage semiconductors",
+    },
+    "nvidia": {
+        "intended_type": "public_equity",
+        "ticker": "NVDA",
+        "skip_yfinance": False,
+        "note": "NVIDIA Corporation (NVDA), GPUs and AI chips",
+    },
+    "microsoft": {
+        "intended_type": "public_equity",
+        "ticker": "MSFT",
+        "skip_yfinance": False,
+        "note": "Microsoft Corporation (MSFT), software and cloud",
+    },
+    "alphabet": {
+        "intended_type": "public_equity",
+        "ticker": "GOOGL",
+        "skip_yfinance": False,
+        "note": "Alphabet Inc (GOOGL), Google parent company",
+    },
+    "netflix": {
+        "intended_type": "public_equity",
+        "ticker": "NFLX",
+        "skip_yfinance": False,
+        "note": "Netflix Inc (NFLX), streaming entertainment",
+    },
+    "intel": {
+        "intended_type": "public_equity",
+        "ticker": "INTC",
+        "skip_yfinance": False,
+        "note": "Intel Corporation (INTC), semiconductors",
+    },
+    "qualcomm": {
+        "intended_type": "public_equity",
+        "ticker": "QCOM",
+        "skip_yfinance": False,
+        "note": "Qualcomm Inc (QCOM), wireless technology and semiconductors",
+    },
+    "sk hynix": {
+        "intended_type": "public_equity",
+        "ticker": "000660.KS",
+        "skip_yfinance": False,
+        "note": "SK Hynix (000660.KS), memory semiconductors, KRX listed",
     },
     # Known private companies — prevent meme/micro-cap token misclassification on CoinGecko
     "anduril": {
@@ -325,8 +457,8 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
     # 0. Disambiguation table — known name conflicts, checked before any API call
     if name_lower in DISAMBIGUATION:
         d = DISAMBIGUATION[name_lower]
-        print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} ({d['note']})")
-        return d["intended_type"], None, None
+        print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} (ticker={d.get('ticker')}) ({d['note']})")
+        return d["intended_type"], d.get("ticker"), None
 
     # 1. Try yfinance first — direct ticker match
     yf_mcap = 0
@@ -380,6 +512,40 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
             import traceback
             print(f"yfinance name resolution failed: {e}", file=sys.stderr)
             traceback.print_exc()
+
+    # 1d. Finnhub symbol_lookup fallback — only runs if yfinance both steps failed
+    if not yf_ticker:
+        try:
+            fh_client = _finnhub_get_client()
+            if fh_client is not None:
+                def _finnhub_lookup():
+                    return fh_client.symbol_lookup(company_name)
+                fh_result = await asyncio.wait_for(
+                    asyncio.to_thread(_finnhub_lookup), timeout=5
+                )
+                fh_matches = [
+                    r for r in (fh_result.get("result") or [])
+                    if r.get("type") in ("Common Stock", "ADR")
+                ]
+                # Prefer US symbols (no dot) over international
+                us_matches = [r for r in fh_matches if "." not in r.get("symbol", "")]
+                candidates = us_matches or fh_matches
+                for r in candidates:
+                    symbol = r.get("symbol", "")
+                    description = r.get("description", "")
+                    # Name overlap sanity check (same logic as step 1b)
+                    if not (company_name.isupper() and len(company_name) <= 5) and description:
+                        q_words = set(company_name.lower().split())
+                        d_words = set(description.lower().replace(".", " ").split())
+                        if not q_words.intersection(d_words):
+                            print(f"[detect] FINNHUB_NAME_MISMATCH: '{company_name}' -> '{description}' ({symbol}) — no overlap, skipping")
+                            continue
+                    yf_ticker = symbol
+                    yf_fullname = description
+                    print(f"[detect] FINNHUB_FALLBACK: '{company_name}' -> '{symbol}' ({description})")
+                    break
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[detect] Finnhub fallback failed: {e}", file=sys.stderr)
 
     # 1c. If yfinance found a match, compare with CoinGecko market cap to resolve conflicts
     if yf_ticker:
