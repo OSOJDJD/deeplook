@@ -1,0 +1,448 @@
+{
+  "solana": {
+    "intended_type": "crypto",
+    "coin_id": "solana",
+    "skip_yfinance": true,
+    "note": "User wants SOL L1 blockchain, not Solana Company (HSDT)"
+  },
+  "ton": {
+    "intended_type": "crypto",
+    "coin_id": "the-open-network",
+    "skip_yfinance": true,
+    "note": "User wants TON blockchain, not Tokamak Network"
+  },
+  "ondo": {
+    "intended_type": "crypto",
+    "coin_id": "ondo",
+    "skip_yfinance": true,
+    "note": "User wants ONDO token, not any stock ticker"
+  },
+  "ripple": {
+    "intended_type": "crypto",
+    "coin_id": "ripple",
+    "skip_yfinance": true,
+    "note": "User wants XRP, not any stock"
+  },
+  "chainlink": {
+    "intended_type": "crypto",
+    "coin_id": "chainlink",
+    "skip_yfinance": true,
+    "note": "User wants LINK token"
+  },
+  "arbitrum": {
+    "intended_type": "crypto",
+    "coin_id": "arbitrum",
+    "skip_yfinance": true,
+    "note": "User wants ARB L2"
+  },
+  "jupiter": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Jupiter DEX on Solana"
+  },
+  "raydium": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Raydium DEX on Solana"
+  },
+  "canva": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "Canva design platform, private company"
+  },
+  "xai": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "xAI, Elon Musk's AI company"
+  },
+  "pendle": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Pendle Finance, yield trading protocol"
+  },
+  "eigenlayer": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "EigenLayer restaking protocol"
+  },
+  "lido": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Lido liquid staking"
+  },
+  "makerdao": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "MakerDAO / Sky Protocol"
+  },
+  "ethena": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Ethena Labs, USDe stablecoin"
+  },
+  "hyperliquid": {
+    "intended_type": "crypto",
+    "skip_yfinance": true,
+    "note": "Hyperliquid perpetual DEX"
+  },
+  "figma": {
+    "intended_type": "private_or_unlisted",
+    "ticker": null,
+    "skip_yfinance": true,
+    "note": "Figma, design tool (Adobe acquisition cancelled)"
+  },
+  "tesla": {
+    "intended_type": "public_equity",
+    "ticker": "TSLA",
+    "skip_yfinance": false,
+    "note": "Tesla Inc (TSLA), EV and energy company"
+  },
+  "apple": {
+    "intended_type": "public_equity",
+    "ticker": "AAPL",
+    "skip_yfinance": false,
+    "note": "Apple Inc (AAPL), consumer electronics"
+  },
+  "amazon": {
+    "intended_type": "public_equity",
+    "ticker": "AMZN",
+    "skip_yfinance": false,
+    "note": "Amazon.com Inc (AMZN), e-commerce and cloud"
+  },
+  "meta": {
+    "intended_type": "public_equity",
+    "ticker": "META",
+    "skip_yfinance": false,
+    "note": "Meta Platforms (META), social media"
+  },
+  "google": {
+    "intended_type": "public_equity",
+    "ticker": "GOOGL",
+    "skip_yfinance": false,
+    "note": "Alphabet / Google (GOOGL), search and cloud"
+  },
+  "tsmc": {
+    "intended_type": "public_equity",
+    "ticker": "TSM",
+    "skip_yfinance": false,
+    "note": "TSMC (Taiwan Semiconductor) — use TSM ADR to avoid TWD currency mismatch"
+  },
+  "amd": {
+    "intended_type": "public_equity",
+    "ticker": "AMD",
+    "skip_yfinance": false,
+    "note": "Advanced Micro Devices (AMD), semiconductors"
+  },
+  "advanced micro devices": {
+    "intended_type": "public_equity",
+    "ticker": "AMD",
+    "skip_yfinance": false,
+    "note": "Advanced Micro Devices (AMD), semiconductors"
+  },
+  "broadcom": {
+    "intended_type": "public_equity",
+    "ticker": "AVGO",
+    "skip_yfinance": false,
+    "note": "Broadcom Inc (AVGO), semiconductors and infrastructure software"
+  },
+  "fabrinet": {
+    "intended_type": "public_equity",
+    "ticker": "FN",
+    "skip_yfinance": false,
+    "note": "Fabrinet (FN), optical packaging and precision manufacturing"
+  },
+  "marvell": {
+    "intended_type": "public_equity",
+    "ticker": "MRVL",
+    "skip_yfinance": false,
+    "note": "Marvell Technology (MRVL), semiconductors"
+  },
+  "marvell technology": {
+    "intended_type": "public_equity",
+    "ticker": "MRVL",
+    "skip_yfinance": false,
+    "note": "Marvell Technology (MRVL), semiconductors"
+  },
+  "lumentum": {
+    "intended_type": "public_equity",
+    "ticker": "LITE",
+    "skip_yfinance": false,
+    "note": "Lumentum Holdings (LITE), photonics and fiber optics"
+  },
+  "coherent": {
+    "intended_type": "public_equity",
+    "ticker": "COHR",
+    "skip_yfinance": false,
+    "note": "Coherent Corp (COHR), photonics and laser technology"
+  },
+  "coherent corp": {
+    "intended_type": "public_equity",
+    "ticker": "COHR",
+    "skip_yfinance": false,
+    "note": "Coherent Corp (COHR), photonics and laser technology"
+  },
+  "samsung": {
+    "intended_type": "public_equity",
+    "ticker": "005930.KS",
+    "skip_yfinance": false,
+    "note": "Samsung Electronics (005930.KS), KRX listed"
+  },
+  "samsung electronics": {
+    "intended_type": "public_equity",
+    "ticker": "005930.KS",
+    "skip_yfinance": false,
+    "note": "Samsung Electronics (005930.KS), KRX listed"
+  },
+  "vertiv": {
+    "intended_type": "public_equity",
+    "ticker": "VRT",
+    "skip_yfinance": false,
+    "note": "Vertiv Holdings (VRT), data center infrastructure"
+  },
+  "micron": {
+    "intended_type": "public_equity",
+    "ticker": "MU",
+    "skip_yfinance": false,
+    "note": "Micron Technology (MU), memory and storage semiconductors"
+  },
+  "micron technology": {
+    "intended_type": "public_equity",
+    "ticker": "MU",
+    "skip_yfinance": false,
+    "note": "Micron Technology (MU), memory and storage semiconductors"
+  },
+  "nvidia": {
+    "intended_type": "public_equity",
+    "ticker": "NVDA",
+    "skip_yfinance": false,
+    "note": "NVIDIA Corporation (NVDA), GPUs and AI chips"
+  },
+  "microsoft": {
+    "intended_type": "public_equity",
+    "ticker": "MSFT",
+    "skip_yfinance": false,
+    "note": "Microsoft Corporation (MSFT), software and cloud"
+  },
+  "alphabet": {
+    "intended_type": "public_equity",
+    "ticker": "GOOGL",
+    "skip_yfinance": false,
+    "note": "Alphabet Inc (GOOGL), Google parent company"
+  },
+  "netflix": {
+    "intended_type": "public_equity",
+    "ticker": "NFLX",
+    "skip_yfinance": false,
+    "note": "Netflix Inc (NFLX), streaming entertainment"
+  },
+  "intel": {
+    "intended_type": "public_equity",
+    "ticker": "INTC",
+    "skip_yfinance": false,
+    "note": "Intel Corporation (INTC), semiconductors"
+  },
+  "qualcomm": {
+    "intended_type": "public_equity",
+    "ticker": "QCOM",
+    "skip_yfinance": false,
+    "note": "Qualcomm Inc (QCOM), wireless technology and semiconductors"
+  },
+  "sk hynix": {
+    "intended_type": "public_equity",
+    "ticker": "000660.KS",
+    "skip_yfinance": false,
+    "note": "SK Hynix (000660.KS), memory semiconductors, KRX listed"
+  },
+  "anduril": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "Anduril Industries, defense tech startup (not the meme token on CoinGecko)"
+  },
+  "spacex": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "SpaceX, aerospace manufacturer, private company"
+  },
+  "stripe": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "Stripe, fintech payments, private company"
+  },
+  "openai": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "OpenAI, AI research company, private"
+  },
+  "databricks": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "Databricks, data analytics platform, private"
+  },
+  "epic games": {
+    "intended_type": "private_or_unlisted",
+    "skip_yfinance": true,
+    "note": "Epic Games, game developer (Fortnite), private"
+  },
+  "innolight": {
+    "intended_type": "public_equity",
+    "ticker": "300502.SZ",
+    "skip_yfinance": false,
+    "note": "InnoLight Technology (300502.SZ), optical transceiver modules, SZSE listed"
+  },
+  "ciena": {
+    "intended_type": "public_equity",
+    "ticker": "CIEN",
+    "skip_yfinance": false,
+    "note": "Ciena Corporation (CIEN), networking and optical systems"
+  },
+  "applied optoelectronics": {
+    "intended_type": "public_equity",
+    "ticker": "AAOI",
+    "skip_yfinance": false,
+    "note": "Applied Optoelectronics Inc (AAOI), fiber-optic networking components"
+  },
+  "eaton": {
+    "intended_type": "public_equity",
+    "ticker": "ETN",
+    "skip_yfinance": false,
+    "note": "Eaton Corporation (ETN), power management"
+  },
+  "schneider electric": {
+    "intended_type": "public_equity",
+    "ticker": "SU.PA",
+    "skip_yfinance": false,
+    "note": "Schneider Electric (SU.PA), energy management, Euronext Paris listed"
+  },
+  "ase technology": {
+    "intended_type": "public_equity",
+    "ticker": "3711.TW",
+    "skip_yfinance": false,
+    "note": "ASE Technology Holding (3711.TW), semiconductor packaging, TWSE listed"
+  },
+  "materion": {
+    "intended_type": "public_equity",
+    "ticker": "MTRN",
+    "skip_yfinance": false,
+    "note": "Materion Corporation (MTRN), advanced materials"
+  },
+  "delta electronics": {
+    "intended_type": "public_equity",
+    "ticker": "2308.TW",
+    "skip_yfinance": false,
+    "note": "Delta Electronics (2308.TW), power and thermal management, TWSE listed"
+  },
+  "unimicron": {
+    "intended_type": "public_equity",
+    "ticker": "3037.TW",
+    "skip_yfinance": false,
+    "note": "Unimicron Technology (3037.TW), PCB manufacturer, TWSE listed"
+  },
+  "elite material": {
+    "intended_type": "public_equity",
+    "ticker": "2383.TW",
+    "skip_yfinance": false,
+    "note": "Elite Material Co (2383.TW), copper-clad laminates, TWSE listed"
+  },
+  "nittobo": {
+    "intended_type": "public_equity",
+    "ticker": "3110.T",
+    "skip_yfinance": false,
+    "note": "Nittobo (3110.T), glass fiber and specialty materials, TSE listed"
+  },
+  "asml": {
+    "intended_type": "public_equity",
+    "ticker": "ASML",
+    "skip_yfinance": false,
+    "note": "ASML Holding (ASML), semiconductor lithography equipment"
+  },
+  "crm": {
+    "intended_type": "public_equity",
+    "ticker": "CRM",
+    "skip_yfinance": false,
+    "note": "Salesforce Inc (NYSE:CRM), CRM platform — 'crm' would match crypto tokens"
+  },
+  "salesforce": {
+    "intended_type": "public_equity",
+    "ticker": "CRM",
+    "skip_yfinance": false,
+    "note": "Salesforce Inc (NYSE:CRM), CRM platform"
+  },
+  "path": {
+    "intended_type": "public_equity",
+    "ticker": "PATH",
+    "skip_yfinance": false,
+    "note": "UiPath Inc (NYSE:PATH), RPA automation — 'path' would match crypto tokens"
+  },
+  "uipath": {
+    "intended_type": "public_equity",
+    "ticker": "PATH",
+    "skip_yfinance": false,
+    "note": "UiPath Inc (NYSE:PATH), RPA automation"
+  },
+  "now": {
+    "intended_type": "public_equity",
+    "ticker": "NOW",
+    "skip_yfinance": false,
+    "note": "ServiceNow Inc (NYSE:NOW), enterprise workflow platform — 'now' would match crypto tokens"
+  },
+  "servicenow": {
+    "intended_type": "public_equity",
+    "ticker": "NOW",
+    "skip_yfinance": false,
+    "note": "ServiceNow Inc (NYSE:NOW), enterprise workflow platform"
+  },
+  "net": {
+    "intended_type": "public_equity",
+    "ticker": "NET",
+    "skip_yfinance": false,
+    "note": "Cloudflare Inc (NYSE:NET), CDN and security — 'net' would match crypto tokens"
+  },
+  "cloudflare": {
+    "intended_type": "public_equity",
+    "ticker": "NET",
+    "skip_yfinance": false,
+    "note": "Cloudflare Inc (NYSE:NET), CDN and security"
+  },
+  "adbe": {
+    "intended_type": "public_equity",
+    "ticker": "ADBE",
+    "skip_yfinance": false,
+    "note": "Adobe Inc (NASDAQ:ADBE), creative and document software"
+  },
+  "adobe": {
+    "intended_type": "public_equity",
+    "ticker": "ADBE",
+    "skip_yfinance": false,
+    "note": "Adobe Inc (NASDAQ:ADBE), creative and document software"
+  },
+  "app": {
+    "intended_type": "public_equity",
+    "ticker": "APP",
+    "skip_yfinance": false,
+    "note": "AppLovin Corp (NASDAQ:APP), mobile ad tech — 'app' would match generic terms"
+  },
+  "applovin": {
+    "intended_type": "public_equity",
+    "ticker": "APP",
+    "skip_yfinance": false,
+    "note": "AppLovin Corp (NASDAQ:APP), mobile ad tech"
+  },
+  "mu": {
+    "intended_type": "public_equity",
+    "ticker": "MU",
+    "skip_yfinance": false,
+    "note": "Micron Technology Inc (NASDAQ:MU), DRAM/NAND memory — 'mu' would match Greek letter / crypto tokens"
+  },
+  "anthropic": {
+    "intended_type": "private_or_unlisted",
+    "ticker": null,
+    "skip_yfinance": true,
+    "note": "Anthropic PBC, AI safety company, not the CoinGecko meme token"
+  },
+  "perplexity": {
+    "intended_type": "private_or_unlisted",
+    "ticker": null,
+    "skip_yfinance": true,
+    "note": "Perplexity AI, search company"
+  }
+}
