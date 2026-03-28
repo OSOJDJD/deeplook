@@ -65,3 +65,6 @@ skills-lock.json
 .agents/
 nvidia_report.md
 ARCHITECTURE.md
+!deeplook/data/
+!deeplook/data/*.json
+!deeplook/data/__init__.py

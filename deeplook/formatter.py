@@ -3,7 +3,7 @@ Human-readable terminal formatter for DeepLook research output.
 
 Usage:
     python -m deeplook.formatter output/Aave_2026-03-12.json
-    # or call format_report(result_dict) from code
+    # or call format_output_v3(result_dict) / format_dual_output_v2(result_dict) from code
 """
 
 import json
@@ -1037,7 +1037,13 @@ def main():
         print(f"Invalid JSON: {e}", file=sys.stderr)
         sys.exit(1)
 
-    format_report(data)
+    _schema = os.environ.get("DEEPLOOK_SCHEMA", "v3")
+    if _schema == "v3" or (data.get("structured_data") or {}).get("_v3"):
+        result = format_output_v3(data)
+    else:
+        result = format_dual_output(data)
+    if isinstance(result, str):
+        sys.stdout.write(result)
 
 
 def build_structured_json_v3(data: dict) -> dict:
