@@ -32,7 +32,7 @@ _FAVICON_ICO = _load_static("favicon.ico")
 _FAVICON_PNG = _load_static("favicon-64.png")
 
 from deeplook.research import run_research  # noqa: E402
-from deeplook.formatter import format_report, format_layer1, format_dual_output, format_lookup_markdown  # noqa: E402
+from deeplook.formatter import format_dual_output, format_lookup_markdown  # noqa: E402
 from deeplook.rate_limiter import RateLimiter, client_ip_var, add_to_waitlist  # noqa: E402
 
 _rate_limiter = RateLimiter()

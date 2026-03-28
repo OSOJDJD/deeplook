@@ -349,163 +349,6 @@ IMPORTANT for business segments:
 REMINDER: Only state facts found in sources. Never hallucinate. Return valid JSON only.
 """
 
-JUDGE_SYSTEM = """You are a company phase assessment agent. You receive structured facts about a company. Assign phase and momentum ONLY based on the facts provided. Do not use general knowledge to fill gaps.
-
-## Hard Rules
-1. Phase must reflect the company's CURRENT operating status, not historical events alone.
-2. positive revenue_growth AND positive operating margin = CANNOT assign DISTRESS.
-3. bull_case and bear_case MUST each contain at least one specific number that appears in the facts JSON.
-4. DISTRESS requires 2+ confirmed signals: bankruptcy/Chapter 11/defunct confirmed in Wikipedia OR layoffs >20% workforce OR SEC/DOJ enforcement OR delisting OR ceased operations confirmed by multiple sources. A single negative article is NOT sufficient.
-5. If len(missing_data) > 50% of total fact fields, add "low_confidence": true.
-6. You MUST reference every important quantitative figure from the facts in bull_case, bear_case, or risks. Do not omit any revenue, ARR, deal size, analyst target price, TVL, mcap/TVL ratio, or other numeric data present in the facts. If facts contain 10 numbers, your output must cite at least 8 of them across bull_case + bear_case + risks combined.
-7. bear_case MUST include at least one macro or geopolitical risk factor relevant to this company. Examples: tariffs, export controls, interest rate policy, commodity price risk, regulatory changes, geopolitical tensions. If no obvious macro risk applies, briefly state why the company is relatively insulated (e.g. "domestic-only revenue base insulates from tariff risk").
-8. If PEG ratio < 1.0 but your phase assessment suggests caution or deceleration, you MUST note this discrepancy in phase_reasoning. Explain why low PEG may be misleading (e.g., forward earnings estimates may be overly optimistic, or growth is expected to decelerate beyond the forecast period).
-
-## Phase Definitions
-- EXPANDING: Active growth — revenue up, new markets, recent fundraising, strong positive catalysts
-- STABLE: Operating normally, no dramatic changes in either direction (default for mature companies)
-- PIVOTING: Business model change in progress, documented in sources
-- DISTRESS: 2+ confirmed collapse signals (see Rule 4)
-- UNKNOWN: Data sources comprehensively failed — use sparingly
-
-## Phase Assignment by Entity Type
-
-### Public Equity (REGIME A — yfinance data present)
-Determine market cap tier first:
-- MEGA CAP (>$500B): EXPANDING if revenue_growth > 15% AND at least one of: earnings_growth > 30%, OR entry into major new market, OR recommendation = strong_buy + analyst_target > current_price * 1.3
-- LARGE CAP ($50B–$500B): EXPANDING if revenue_growth > 20% OR earnings_growth > 30%, with news showing growth catalysts
-- MID/SMALL CAP (<$50B): EXPANDING if revenue_growth > 15% OR significant positive catalyst in news
-- STABLE = default for mature public companies with steady positive metrics and no major shifts
-- Exception: revenue_growth > 50% = EXPANDING at any scale
-
-### Crypto (REGIME B)
-EXPANDING if 2+ of: recent funding >$10M / TVL or mcap growing / major protocol upgrade / new product/chain launch
-STABLE: established project with steady operations, no dramatic growth or decline
-DISTRESS only: rug pull / exploit losing >50% funds / regulatory shutdown / token death spiral >90% drop
-
-### Private (REGIME C)
-Use funding stage as primary proxy:
-- Seed/Angel/Pre-seed → EXPANDING
-- Series A / Series B → EXPANDING
-- Series C+ / Late Stage / Pre-IPO → EXPANDING + ACCELERATING
-- No funding >18 months AND no growth signals in news → STABLE
-- No funding history AND no growth signals → STABLE (default)
-
-## Momentum Rules
-- ACCELERATING: revenue_growth > 30% AND positive earnings surprise AND 3+ positive signals in 90 days. OR for private/crypto: funding + partnerships + user growth all within 90 days.
-- STEADY: consistent metrics, no dramatic changes
-- DECELERATING: growth rate declining QoQ, negative earnings revisions, cooling news sentiment
-- CRISIS: active collapse, exploit aftermath, regulatory enforcement
-
-## Output (valid JSON only):
-{
-  "phase": "EXPANDING|STABLE|PIVOTING|DISTRESS|UNKNOWN",
-  "phase_reasoning": "cite specific facts: e.g. revenue_growth +23% YoY + FCF $2.1B + 3 positive signals in 90 days",
-  "momentum": "ACCELERATING|STEADY|DECELERATING|CRISIS",
-  "bull_case": "ONE sentence, max 25 words, must contain a specific number from the facts",
-  "bear_case": "ONE sentence, max 25 words, must contain a specific number or named risk from the facts",
-  "risks": [
-    {"risk": "description", "severity": "high|medium|low", "evidence": "which fact supports this"}
-  ],
-  "low_confidence": false
-}
-
-REMINDER: Phase must reflect CURRENT status from provided facts only. Return valid JSON only.
-"""
-
-ACT_SYSTEM = """You are an action recommendation agent. You receive company facts and a judgment. Produce a concise, evidence-based action recommendation.
-
-## Hard Rules
-1. wait_for uses two fallback tiers — work through them in order:
-   TIER A (preferred): If facts.upcoming_events contains any entry (including date="TBD"), use the most decision-relevant one. Set wait_for_source to that event's text.
-   TIER B (fallback): If upcoming_events is empty, scan judgment.risks and facts.signals for the single most concrete next event that would change your assessment (e.g. "sPENDLE adoption rate after governance migration", "Ch.11 emergence announcement", "next fundraise round valuation"). Write it as a specific observable event. Set wait_for_source = null.
-   ONLY if both tiers yield nothing meaningful, write exactly: "No confirmed catalyst in current sources"
-2. Do NOT predict or infer dates beyond what sources state. For Tier B events, describe the event, not a guessed date.
-3. wait_for_source: exact text of the upcoming_events entry used (Tier A), or null (Tier B or no catalyst).
-4. confidence:
-   - "high" if missing_data has < 3 items AND judgment.low_confidence is false
-   - "medium" if missing_data has 3–6 items OR judgment.low_confidence is true
-   - "low" if missing_data has > 6 items
-5. one_line: max 15 words, direct judgment, no filler
-6. action rules:
-   - EXPANDING + ACCELERATING → "research_deeper"
-   - EXPANDING + STEADY → "research_deeper"
-   - STABLE + any → "monitor"
-   - PIVOTING + any → "wait_for_catalyst"
-   - DISTRESS + any → "avoid"
-   - UNKNOWN + any → "research_deeper"
-7. bull_case and bear_case MUST include every important quantitative figure from judgment.bull_case and judgment.bear_case. Additionally, if judgment.risks or facts contain analyst target prices, mcap/TVL ratios, revenue growth rates, ARR figures, or deal sizes that were not in judgment.bull_case/bear_case, incorporate the most investment-relevant ones. Do not replace specific numbers with vague qualitative descriptions.
-
-## Output (valid JSON only):
-{
-  "one_line": "max 15 words, direct assessment, no filler",
-  "bull_case": "(copy exactly from judgment.bull_case)",
-  "bear_case": "(copy exactly from judgment.bear_case)",
-  "wait_for": "ONE specific event with timeline from upcoming_events, or 'No confirmed catalyst in current sources'",
-  "wait_for_source": "exact text of the upcoming_events entry used, or null",
-  "action": "research_deeper|monitor|avoid|wait_for_catalyst",
-  "confidence": "high|medium|low",
-  "guidance": {
-    "period": "FY2026 or Q1 2026",
-    "items": [
-      {"metric": "Revenue", "guidance": "$34-35B", "sentiment": "in-line"},
-      {"metric": "EPS", "guidance": "Mid-single-digit decline", "sentiment": "weak"}
-    ]
-  },
-  "segments": [
-    {"name": "Segment Name", "metric": "+X% YoY or $XB revenue", "context": "brief note"}
-  ]
-}
-
-IMPORTANT for guidance: Extract forward guidance from earnings calls, press releases, or investor presentations found in the fetched data. Use sentiment "strong" (beats/raises), "in-line" (meets), or "weak" (misses/cuts). If no forward guidance is available in the sources, set guidance = null.
-
-IMPORTANT for segments: Extract 3-6 business segment metrics from SEC filings, earnings transcripts, or news if available. If no segment data exists in the sources, set segments = [].
-
-IMPORTANT for defense/government contractors: Identify contract type when possible. IDIQ (Indefinite Delivery/Indefinite Quantity) contract ceilings represent maximum potential value, NOT guaranteed revenue. State this distinction clearly in one_line or bear_case when relevant. Do not treat a contract ceiling as confirmed backlog.
-
-IMPORTANT for private/pre-IPO companies: entry and exit criteria must include a liquidity caveat. Note that shares cannot be freely traded on public markets. Specify whether criteria apply to secondary market transactions, future IPO pricing, or are hypothetical benchmarks for monitoring only.
-
-REMINDER: Every claim must cite specific data. No generic statements. Return valid JSON only.
-"""
-
-
-VALIDATE_SYSTEM = """You are a verdict validation and refinement agent. You receive a preliminary verdict, structured facts, and peer data. Produce a sharper, opinionated verdict with explicit stance and actionable triggers.
-
-## Hard Rules
-1. Take a clear stance — bullish, bearish, or neutral. Do not hedge.
-2. entry_trigger: ONE specific, observable condition that would justify entering a position (e.g. "Revenue growth re-accelerates above 20% YoY in next earnings", "Stock pulls back below $X support"). Must be concrete.
-3. risk_trigger: ONE specific, observable condition that would force exit or avoidance (e.g. "Operating margin falls below 10%", "Key customer contract lost"). Must be concrete.
-4. peer_context: ONE sentence comparing valuation to peers using real numbers from peer data. If no peer data available, set to null.
-5. Rewrite one_line to have a clear directional stance. Max 15 words. No filler.
-6. If bull_case narrative contradicts signals (e.g. bull says accelerating but signals show deceleration), note the gap in analysis_context.narrative_gap and side with the data.
-7. FORBIDDEN phrases — never output: "demands scrutiny", "mixed signals", "investors should monitor", "presents both opportunities and challenges", "warrants attention", "remains to be seen", "complex landscape".
-8. analysis_context: compute from provided data. Set any field to null if the data to compute it is absent.
-9. Before finalizing, verify all entry/exit conditions are logically and mathematically consistent. Specific checks: (a) If entry_price is below a stated support level (e.g. MA), the support is broken — do not say "while maintaining support above [higher price]". (b) If a per-unit cost is derived by division, verify numerator and denominator are from the same business segment. (c) If an event appears in signals as completed, it cannot also appear as an upcoming catalyst.
-10. Check signal timeline for contradictions: if an event is described as completed/launched in the timeline (recent_signals), it MUST NOT also appear as an upcoming catalyst (upcoming_catalysts). Flag and fix any such contradiction before finalizing output.
-
-## Output (valid JSON only):
-{
-  "one_line": "max 15 words, directional stance, no filler",
-  "bull_case": "copy from input or sharpen with specific numbers from facts",
-  "bear_case": "copy from input or sharpen with specific numbers from facts",
-  "wait_for": "copy exactly from preliminary_verdict.wait_for",
-  "stance": "bullish|bearish|neutral",
-  "entry_trigger": "ONE specific observable condition to enter",
-  "risk_trigger": "ONE specific observable condition to exit or avoid",
-  "peer_context": "ONE sentence vs peers with real numbers, or null",
-  "analysis_context": {
-    "peer_relative_pe": "e.g. 'Trades at 45x vs peer avg 32x — 41% premium' or null",
-    "peer_relative_ps": "e.g. 'P/S 18x vs peers 12x avg' or null",
-    "growth_vs_valuation": "e.g. 'Revenue +28% YoY but PE premium suggests market already pricing in growth' or null",
-    "technical_summary": "e.g. 'Below 50d MA, RSI 42 — not oversold yet' or null",
-    "narrative_gap": "e.g. 'Bull cites AI growth but 3 of last 5 signals show margin compression' or null"
-  }
-}
-
-REMINDER: Take a clear stance. Do not hedge. Check all numbers for mathematical consistency. Return valid JSON only.
-"""
-
-
 # ── Query generation (Round 1.5) ──────────────────────────────────────────────
 
 QUERY_GEN_SYSTEM = """You are a research assistant. Given structured data about a company from initial sources (financial data, SEC filings, Wikipedia), generate targeted search queries to find the most relevant recent news and video content.
@@ -527,129 +370,131 @@ Rules:
 
 
 def _build_compress_prompt(entity_type: str) -> str:
-    """Build entity-specific compress prompt for Haiku."""
-    base = """You are a financial research assistant. Given the raw data below, extract:
+    """Build entity-specific compress prompt for Haiku (v3)."""
+    base = """You are a company intelligence analyst. Compress the raw research data into a structured brief.
 
-1. RECENT_NEWS: Up to 5 most relevant recent events. One sentence each. Facts only, no opinion.
-   Format: - [YYYY-MM-DD] sentence
+## Output sections
 
-2. FORWARD_LOOKING: Up to 3 upcoming events or things to watch. Each must have a date or timeframe if possible.
-   Format: - item
+### EVENTS
+Recent significant events. Max 5 items. Each must have:
+- date: exact date from source (YYYY-MM-DD)
+- summary: 1 sentence, must include specific numbers or names
+- sentiment: "positive" / "negative" / "neutral"
 
-3. ENTITY_CONTEXT: Up to 3 qualitative observations that code cannot extract — things only apparent from reading news/text.
-   Format: - observation
+Priority: events that change the company's trajectory > routine updates.
 
-4. VERDICT: Lightweight starting point — a higher-end model will override this. Be direct and specific.
-   - one_line: max 15 words, direct assessment with a number
-   - stance: pick exactly one of bullish/bearish/neutral, no hedging
-   - bull_case: one sentence, max 35 words, must contain a specific number
-   - bear_case: one sentence, max 35 words, must contain a specific number or named risk
-   - wait_for: ONE specific upcoming event — no semicolons, no lists
-   - action: revenue_growth > 20% + positive signals → research_deeper; steady → monitor; major negative → avoid; unclear → wait_for_catalyst
-   - confidence: high if strong data, medium if partial, low if data is insufficient
+### CONTEXT
+Exactly 3 insights. Each is 1-2 sentences. They must follow this structure:
+1. WHAT: What is this company doing right now? Core positioning and strategy.
+2. SO WHAT: What do the recent events mean? Why should someone care?
+3. BUT WHAT: What risk, tension, or uncertainty should someone watch?
+
+Do NOT prefix items with labels like "WHAT:", "SO WHAT:", or "BUT WHAT:". Write the insight directly without any prefix.
+Do NOT repeat facts from EVENTS. CONTEXT interprets what events mean.
+
+### CATALYSTS
+Upcoming events or triggers. Max 4 items. Each is 1 sentence.
+Must include dates when known. If no dates known, describe the trigger condition.
+
+### DESCRIPTION
+1-2 sentence summary of what this company does. For a reader who has never heard of it.
+Must mention: sector/industry and primary product/service.
+
+### FOUNDERS
+List of founder names. If not found in data, return empty array [].
+
+### VALUATION_EXTRACT (private/unlisted companies only)
+If news mentions a valuation (e.g. "valued at $159B"), extract:
+- value: the number as string (e.g. "$159B")
+- source: "news_report" / "secondary_market" / "funding_round"
+- date: when reported (YYYY-MM)
+If no valuation found, return null.
+
+### VERDICT
+- one_line: 1-sentence summary judgment. Must have a clear direction, not hedge.
+- momentum: "accelerating" / "steady" / "decelerating" / "uncertain"
+  Decide based on: revenue trend + recent events + competitive position.
+- tailwind: Primary positive force. 1 sentence with specific evidence.
+- headwind: Primary negative force or risk. 1 sentence with specific evidence.
+- watch_for: What specific event or data point would change the picture? 1 sentence.
+
+## Rules
+- No fixed word limit. Let content density determine length.
+  Per-section limits: EVENTS max 5 items (1 sentence each), CONTEXT exactly 3 items (1-2 sentences each),
+  CATALYSTS max 4 items (1 sentence each), DESCRIPTION 1-2 sentences, VERDICT 5 fields (1 sentence each).
+- Only state facts from provided sources. Never hallucinate.
+- Numbers must be specific. Never write "significant growth" — write "+73% YoY".
+- Every claim must be traceable to the provided data.
 """
 
     entity_guidance = {
         "public_equity": """
-For RECENT_NEWS, prioritize: earnings results, analyst upgrades/downgrades, institutional activity (13F), M&A rumors, product launches, regulatory actions.
-For FORWARD_LOOKING, prioritize: next earnings date + what to watch, analyst consensus target, upcoming catalysts with dates.
-For ENTITY_CONTEXT, look for: management tone shift, competitive dynamics not in numbers, sector rotation signals.""",
+For EVENTS priority: earnings results, analyst upgrades/downgrades, institutional activity (13F), M&A rumors, product launches, regulatory actions.
+For CATALYSTS priority: next earnings date + what to watch, analyst consensus target, upcoming catalysts with dates.
+For CONTEXT focus: management tone shift, competitive dynamics not in numbers, sector rotation signals.""",
 
         "crypto": """
-For RECENT_NEWS, prioritize: governance proposals/votes, security incidents (hacks/exploits), major partnerships, protocol upgrades, token unlock events, regulatory actions.
-For FORWARD_LOOKING, prioritize: upcoming governance votes with dates, token unlock schedule, roadmap milestones, regulatory deadlines.
-For ENTITY_CONTEXT, look for: TVL trend direction, developer activity signals, community sentiment shift, competitive protocol dynamics.""",
+For EVENTS priority: governance proposals/votes, security incidents (hacks/exploits), major partnerships, protocol upgrades, token unlock events, regulatory actions.
+For CATALYSTS priority: upcoming governance votes with dates, token unlock schedule, roadmap milestones, regulatory deadlines.
+For CONTEXT focus: TVL trend direction, developer activity signals, community sentiment shift, competitive protocol dynamics.""",
 
         "venture_capital": """
-For RECENT_NEWS, prioritize: new funding rounds (amount + lead investor), key executive hires/departures, notable portfolio investments or exits, fund launches, strategic pivots.
-For FORWARD_LOOKING, prioritize: expected next fund close, sector thesis signals, upcoming portfolio company events (IPO, acquisition).
-For ENTITY_CONTEXT, look for: investment thesis evolution, portfolio concentration risk, team changes that signal strategy shift.""",
+For EVENTS priority: new funding rounds (amount + lead investor), key executive hires/departures, notable portfolio investments or exits, fund launches, strategic pivots.
+For CATALYSTS priority: expected next fund close, sector thesis signals, upcoming portfolio company events (IPO, acquisition).
+For CONTEXT focus: investment thesis evolution, portfolio concentration risk, team changes that signal strategy shift.""",
 
         "private_or_unlisted": """
-For RECENT_NEWS, prioritize: new funding rounds (amount + lead investor), product launches, key partnerships, executive changes, regulatory milestones.
-For FORWARD_LOOKING, prioritize: expected funding round, IPO signals, product launch dates, expansion milestones.
-For ENTITY_CONTEXT, look for: competitive positioning, market traction signals, team strength.""",
+For EVENTS priority: new funding rounds (amount + lead investor), product launches, key partnerships, executive changes, regulatory milestones.
+For CATALYSTS priority: expected funding round, IPO signals, product launch dates, expansion milestones.
+For CONTEXT focus: competitive positioning, market traction signals, team strength.""",
 
         "defunct": """
-For RECENT_NEWS, prioritize: legal proceedings updates, regulatory actions, creditor recovery distributions, key personnel indictments/settlements, asset sales.
-For FORWARD_LOOKING, prioritize: next court date, expected distribution timeline, pending regulatory decisions.
-For ENTITY_CONTEXT, look for: recovery rate vs expectations, knock-on effects on industry, lessons cited by regulators.""",
+For EVENTS priority: legal proceedings updates, regulatory actions, creditor recovery distributions, key personnel indictments/settlements, asset sales.
+For CATALYSTS priority: next court date, expected distribution timeline, pending regulatory decisions.
+For CONTEXT focus: recovery rate vs expectations, knock-on effects on industry, lessons cited by regulators.""",
     }
 
     guidance = entity_guidance.get(entity_type) or entity_guidance.get("private_or_unlisted", "")
 
     footer = """
-STRICT RULES:
-- Maximum 350 words total output
-- Facts only. No company overview.
-- Each bullet = one sentence. No multi-sentence bullets.
-- If data is insufficient for a section, write "- Insufficient data" and move on.
-- For verdict: if data is insufficient, set confidence = "low" and still provide best-effort stance.
+Return valid JSON only. No markdown, no explanation.
 
-Output valid JSON only:
 {
-  "recent_news": [
-    {"date": "YYYY-MM-DD", "summary": "one sentence with facts", "sentiment": "positive|negative|neutral"}
-  ],
-  "forward_looking": ["item with date or timeframe"],
-  "entity_context": ["qualitative observation"],
+  "events": [{"date": "YYYY-MM-DD", "summary": "...", "sentiment": "positive|negative|neutral"}],
+  "context": ["WHAT: ...", "SO WHAT: ...", "BUT WHAT: ..."],
+  "catalysts": ["..."],
+  "description": "...",
+  "founders": ["..."],
+  "valuation_extract": {"value": "...", "source": "...", "date": "..."} | null,
   "verdict": {
-    "one_line": "max 15 words, direct assessment with a number",
-    "stance": "bullish|bearish|neutral",
-    "bull_case": "ONE sentence, max 35 words, must contain a specific number",
-    "bear_case": "ONE sentence, max 35 words, must contain a specific number or named risk",
-    "wait_for": "ONE specific upcoming event. No semicolons.",
-    "action": "research_deeper|monitor|avoid|wait_for_catalyst",
-    "confidence": "high|medium|low"
+    "one_line": "...",
+    "momentum": "accelerating|steady|decelerating|uncertain",
+    "tailwind": "...",
+    "headwind": "...",
+    "watch_for": "..."
   }
-}
-
-Return valid JSON only. No markdown, no explanation."""
+}"""
 
     return base + guidance + footer
 
 
-def _enforce_word_limits(verdict: dict) -> dict:
-    """Truncate verdict fields that exceed word limits, cutting at the nearest punctuation."""
-    limits = {
-        "one_line": 20,
-        "bull_case": 40,
-        "bear_case": 40,
-        "wait_for": 30,
-    }
-    for field, max_words in limits.items():
-        text = verdict.get(field, "")
-        if not text:
-            continue
-        # wait_for: strip everything after the first semicolon
-        if field == "wait_for" and ";" in text:
-            text = text[:text.index(";")].strip()
-            verdict[field] = text
-        words = text.split()
-        if len(words) <= max_words:
-            continue
-        truncated = " ".join(words[:max_words])
-        # walk back to nearest sentence-ending punctuation
-        for i in range(len(truncated) - 1, -1, -1):
-            if truncated[i] in ".;,":
-                truncated = truncated[:i + 1]
-                break
-        else:
-            truncated = truncated + "."
-        verdict[field] = truncated
-    return verdict
-
-
 async def compress_context(structured_data: dict) -> dict:
-    """Single Haiku call: extract recent news, forward-looking items, entity context.
+    """Single LLM call: compress fetcher data into structured brief (v3 prompt).
     Input: output of prepare_structured_data()
-    Output: {recent_news, forward_looking, entity_context, _model, _tokens}
+    Output: {events, context, catalysts, description, founders, valuation_extract, verdict, _model, _tokens}
+
+    Model selection: DEEPLOOK_MODEL env var overrides all roles. If unset, uses Haiku (extract role).
     """
     import asyncio as _asyncio
 
     company_name = structured_data.get("company_name", "")
     entity_type = structured_data.get("entity_type", "")
     compress_system = _build_compress_prompt(entity_type)
+
+    # DEEPLOOK_MODEL override: if set, use that model for all calls
+    _override_model = os.environ.get("DEEPLOOK_MODEL")
+    if _override_model:
+        os.environ["DEEPLOOK_EXTRACT_MODEL"] = _override_model
 
     # Build text context: news + website/wiki snippets + entity-specific numbers
     extra_context = ""
@@ -674,15 +519,22 @@ async def compress_context(structured_data: dict) -> dict:
         result, model, tokens = await _asyncio.to_thread(
             _call_llm_with_retry,
             user_prompt, compress_system, "extract", "compress_context",
-            0.2, 800,
+            0.2, 1200,
         )
         log("compress_context", "OK", f"model={model}, tokens={tokens}")
-        verdict = _enforce_word_limits(result.get("verdict") or {})
         return {
-            "recent_news": result.get("recent_news", []),
-            "forward_looking": result.get("forward_looking", []),
-            "entity_context": result.get("entity_context", []),
-            "verdict": verdict,
+            # v3 fields
+            "events": result.get("events", []),
+            "context": result.get("context", []),
+            "catalysts": result.get("catalysts", []),
+            "description": result.get("description"),
+            "founders": result.get("founders", []),
+            "valuation_extract": result.get("valuation_extract"),
+            "verdict": result.get("verdict") or {},
+            # v2 backward-compat aliases (so build_structured_json_v2 still works)
+            "recent_news": result.get("events", []),
+            "forward_looking": result.get("catalysts", []),
+            "entity_context": result.get("context", []),
             "_model": model,
             "_tokens": tokens,
         }
@@ -690,10 +542,16 @@ async def compress_context(structured_data: dict) -> dict:
         log("compress_context", "FAIL", str(e))
         print(f"[compress_context] failed: {e}")
         return {
+            "events": [],
+            "context": [],
+            "catalysts": [],
+            "description": None,
+            "founders": [],
+            "valuation_extract": None,
+            "verdict": {},
             "recent_news": [],
             "forward_looking": [],
             "entity_context": [],
-            "verdict": {},
             "_model": "failed",
             "_tokens": 0,
         }
@@ -747,383 +605,3 @@ def _call_llm_with_retry(
             raise ValueError(f"{call_name} JSON parse failed after retry: {e2}") from e2
 
 
-def _validate_case_numbers(judgment: dict, facts: dict) -> None:
-    """Warn if bull/bear case contains numbers not found in facts (simple string check)."""
-    facts_str = json.dumps(facts)
-    for field in ("bull_case", "bear_case"):
-        text = judgment.get(field, "")
-        numbers = re.findall(r'\$[\d,.]+[BMKTbmkt%]?|\d+(?:\.\d+)?%|\b\d{4}\b', text)
-        for num in numbers:
-            num_clean = num.replace("$", "").replace(",", "")
-            if num_clean not in facts_str:
-                log("validate", "NUMBER_NOT_IN_FACTS", f"{field}: '{num}' not found in facts")
-
-
-def _validate_wait_for_source(verdict: dict, facts: dict) -> None:
-    """Only reset wait_for when it is an empty string (LLM left it blank)."""
-    if verdict.get("wait_for", "") == "":
-        verdict["wait_for"] = "No confirmed catalyst in current sources"
-        verdict["wait_for_source"] = None
-
-
-def _assemble(
-    company_name: str,
-    facts: dict,
-    judgment: dict,
-    verdict: dict,
-    total_time: float,
-    api_calls: int,
-    models_used: list[str],
-    total_tokens: int,
-) -> dict:
-    """Combine three-call outputs into formatter-compatible JSON."""
-    ai_judgment = {
-        "company_phase": judgment.get("phase", "UNKNOWN"),
-        "momentum": judgment.get("momentum", "STEADY"),
-        "risk_signals": [
-            r.get("risk", str(r)) if isinstance(r, dict) else str(r)
-            for r in judgment.get("risks", [])
-        ],
-        "forward_looking": [
-            e["event"] for e in facts.get("upcoming_events", []) if e.get("event")
-        ],
-        "verdict": {
-            "one_line": verdict.get("one_line", ""),
-            "bull_case": verdict.get("bull_case", ""),
-            "bear_case": verdict.get("bear_case", ""),
-            "wait_for": verdict.get("wait_for", ""),
-            "stance": verdict.get("stance"),
-            "entry_trigger": verdict.get("entry_trigger"),
-            "risk_trigger": verdict.get("risk_trigger"),
-            "peer_context": verdict.get("peer_context"),
-        },
-        "analysis_context": verdict.get("analysis_context"),
-        "guidance": verdict.get("guidance"),
-        "segments": verdict.get("segments") or facts.get("segments") or [],
-    }
-    return {
-        "company_name": facts.get("company_name", company_name),
-        "research_date": date.today().isoformat(),
-        "data_sources_used": facts.get("data_sources_used", []),
-        "data_sources_failed": facts.get("data_sources_failed", []),
-        "overview": facts.get("overview", {}),
-        "funding": facts.get("funding", {}),
-        "market_data": facts.get("market_data", {}),
-        "valuation": facts.get("valuation", {}),
-        "competitive_landscape": facts.get("competitive_landscape", {}),
-        "recent_signals": facts.get("recent_signals", []),
-        "upcoming_catalysts": facts.get("upcoming_catalysts", []),
-        "ai_judgment": ai_judgment,
-        "metadata": {
-            "total_time_seconds": round(total_time, 2),
-            "total_api_calls": api_calls,
-            "llm_model_used": " → ".join(models_used),
-            "llm_tokens_used": total_tokens,
-        },
-    }
-
-
-def _low_data_report(
-    company_name: str,
-    facts: dict,
-    total_time: float,
-    api_calls: int,
-    models_used: list[str],
-    total_tokens: int,
-) -> dict:
-    """Minimal report returned when data coverage is insufficient for judgment."""
-    return {
-        "company_name": facts.get("company_name", company_name),
-        "research_date": date.today().isoformat(),
-        "data_sources_used": facts.get("data_sources_used", []),
-        "data_sources_failed": facts.get("data_sources_failed", []),
-        "overview": facts.get("overview", {}),
-        "funding": {},
-        "market_data": facts.get("market_data", {}),
-        "valuation": {"note": "Insufficient data coverage — most sources returned no data"},
-        "competitive_landscape": {},
-        "recent_signals": [],
-        "upcoming_catalysts": [],
-        "ai_judgment": {
-            "company_phase": "UNKNOWN",
-            "momentum": "STEADY",
-            "risk_signals": ["Insufficient data coverage — most sources returned no data"],
-            "forward_looking": [],
-            "verdict": {
-                "one_line": "Insufficient data — manual research required",
-                "bull_case": "",
-                "bear_case": "",
-                "wait_for": "No confirmed catalyst in current sources",
-            },
-        },
-        "metadata": {
-            "total_time_seconds": round(total_time, 2),
-            "total_api_calls": api_calls,
-            "llm_model_used": " → ".join(models_used),
-            "llm_tokens_used": total_tokens,
-            "low_data_coverage": True,
-        },
-    }
-
-
-# ── Pipeline steps ────────────────────────────────────────────────────────────
-
-def extract_facts(
-    company_name: str, entity_type: str, fetcher_results: dict
-) -> tuple[dict, str, int]:
-    """Call 1 (Haiku): Extract structured facts + display fields from raw fetcher data."""
-    truncated = {}
-    for k, v in fetcher_results.items():
-        s = json.dumps(v, indent=2, default=str)
-        if len(s) > 4000:
-            s = s[:4000] + "... [TRUNCATED]"
-        truncated[k] = s
-
-    sections = [
-        f"Company: {company_name}",
-        f"Type: {entity_type}",
-        f"Research Date: {date.today().isoformat()}",
-        "",
-    ]
-    for source_name, data_str in truncated.items():
-        label = source_name.replace("_", " ").title()
-        sections.append(f"=== {label} Data ===")
-        sections.append(data_str)
-        sections.append("")
-
-    _SKIP_INSTRUCTIONS = {
-        "public_equity": (
-            "Skip these fields entirely (do not include in output):\n"
-            "- funding.total_raised, funding.last_round (not applicable for public companies)\n"
-            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
-            "- overview.team_size (rarely available, skip)\n"
-            "- valuation.ev_to_ebitda (skip if not available, do not output \"Insufficient data\")\n"
-            "Keep output focused on: financials, valuation REGIME_A, signals, peers."
-        ),
-        "crypto": (
-            "Skip these fields entirely (do not include in output):\n"
-            "- financials.earnings_growth, financials.fcf, financials.margin (not applicable for crypto)\n"
-            "- funding.last_round (omit unless explicitly known)\n"
-            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
-            "- segments (not applicable for crypto)\n"
-            "Keep output focused on: market_data.key_metrics (TVL, DAU, fees), signals, competitive_landscape."
-        ),
-        "private": (
-            "Skip these fields entirely (do not include in output):\n"
-            "- financials.earnings_growth, financials.fcf (not publicly available)\n"
-            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
-            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
-            "- price.change_30d (no public price)\n"
-            "- segments (rarely available)\n"
-            "Keep output focused on: funding, overview, signals, competitive_landscape, upcoming_catalysts."
-        ),
-        "private_or_unlisted": (
-            "Skip these fields entirely (do not include in output):\n"
-            "- financials.earnings_growth, financials.fcf (not publicly available)\n"
-            "- valuation REGIME_A fields: pe_ratio, ev_to_ebitda, price_to_sales, analyst_target_price\n"
-            "- valuation REGIME_B fields: fully_diluted_valuation, market_cap_to_tvl, protocol_revenue_annual, upcoming_unlocks\n"
-            "- price.change_30d (no public price)\n"
-            "- segments (rarely available)\n"
-            "Keep output focused on: funding, overview, signals, competitive_landscape, upcoming_catalysts."
-        ),
-    }
-    skip_note = _SKIP_INSTRUCTIONS.get(entity_type, "")
-
-    user_message = "\n".join(sections)
-    skip_block = f"\n\n{skip_note}\n" if skip_note else ""
-    prompt = user_message + skip_block + "\nRespond with valid JSON only. No markdown, no explanation."
-    log("extract_facts", "START", f"input_chars={len(user_message)}")
-
-    result, model, tokens = _call_llm_with_retry(prompt, EXTRACT_SYSTEM, "extract", "extract_facts", temperature=0.2, max_tokens=4096)
-    print(f"[extract_facts] model={model}, tokens={tokens}")
-    return result, model, tokens
-
-
-def judge(facts: dict) -> tuple[dict, str, int]:
-    """Call 2 (Sonnet): Assess phase/momentum/risks from structured facts."""
-    facts_for_judge = {
-        "company_name": facts.get("company_name"),
-        "entity_type": facts.get("entity_type"),
-        "price": facts.get("price"),
-        "financials": facts.get("financials"),
-        "signals": facts.get("signals"),
-        "upcoming_events": facts.get("upcoming_events"),
-        "competitors": facts.get("competitors"),
-        "missing_data": facts.get("missing_data"),
-    }
-    prompt = json.dumps(facts_for_judge, indent=2) + "\n\nRespond with valid JSON only."
-    log("judge", "START", f"input_chars={len(prompt)}")
-
-    result, model, tokens = _call_llm_with_retry(prompt, JUDGE_SYSTEM, "judge", "judge", temperature=0.4, max_tokens=2048)
-    print(f"[judge] model={model}, tokens={tokens}")
-    return result, model, tokens
-
-
-def recommend_action(facts: dict, judgment: dict) -> tuple[dict, str, int]:
-    """Call 3 (Sonnet): Produce actionable verdict from facts + judgment."""
-    input_data = {
-        "facts": {
-            "company_name": facts.get("company_name"),
-            "entity_type": facts.get("entity_type"),
-            "price": facts.get("price"),
-            "financials": facts.get("financials"),
-            "signals": facts.get("signals"),
-            "upcoming_events": facts.get("upcoming_events"),
-            "missing_data": facts.get("missing_data"),
-        },
-        "judgment": judgment,
-    }
-    prompt = json.dumps(input_data, indent=2) + "\n\nRespond with valid JSON only."
-    log("recommend_action", "START", f"input_chars={len(prompt)}")
-
-    result, model, tokens = _call_llm_with_retry(prompt, ACT_SYSTEM, "act", "recommend_action", temperature=0.1, max_tokens=3072)
-    print(f"[recommend_action] model={model}, tokens={tokens}")
-    return result, model, tokens
-
-
-def validate_verdict(facts: dict, judgment: dict, verdict: dict) -> tuple[dict, str, int]:
-    """Call 4 (Sonnet): Sharpen verdict with stance, entry/risk triggers, and peer context."""
-    input_data = {
-        "preliminary_verdict": verdict,
-        "judgment": {
-            "phase": judgment.get("phase"),
-            "momentum": judgment.get("momentum"),
-            "bull_case": judgment.get("bull_case"),
-            "bear_case": judgment.get("bear_case"),
-            "risks": judgment.get("risks"),
-        },
-        "facts": {
-            "company_name": facts.get("company_name"),
-            "entity_type": facts.get("entity_type"),
-            "price": facts.get("price"),
-            "financials": facts.get("financials"),
-            "valuation": facts.get("valuation"),
-            "competitive_landscape": facts.get("competitive_landscape"),
-            "recent_signals": facts.get("recent_signals", [])[:5],
-        },
-    }
-    prompt = json.dumps(input_data, indent=2) + "\n\nRespond with valid JSON only."
-    log("validate_verdict", "START", f"input_chars={len(prompt)}")
-
-    result, model, tokens = _call_llm_with_retry(prompt, VALIDATE_SYSTEM, "validate", "validate_verdict", temperature=0.3, max_tokens=2048)
-    print(f"[validate_verdict] model={model}, tokens={tokens}")
-    return result, model, tokens
-
-
-# ── Main entry point ──────────────────────────────────────────────────────────
-
-def synthesize(
-    company_name: str,
-    company_type: str,
-    fetcher_results: dict,
-    total_time: float,
-    api_call_count: int,
-) -> dict:
-    """Run the two-stage pipeline (compress + judge) via four sequential LLM calls.
-    Returns formatter-compatible JSON.
-    """
-    total_tokens = 0
-    models_used: list[str] = []
-
-    # ── Call 1: Extract ────────────────────────────────────────────────────
-    _t1 = time.time()
-    try:
-        facts, model1, tokens1 = extract_facts(company_name, company_type, fetcher_results)
-        models_used.append(model1)
-        total_tokens += tokens1
-    except Exception as e:
-        log("synthesize", "EXTRACT_FAIL", str(e))
-        print(f"[synthesize] extract_facts failed: {e}")
-        return {
-            "error": f"Extract step failed: {e}",
-            "metadata": {
-                "total_time_seconds": round(total_time, 2),
-                "total_api_calls": api_call_count,
-                "llm_model_used": "failed-extract",
-                "llm_tokens_used": total_tokens,
-            },
-        }
-    _timing_extract = round(time.time() - _t1, 2)
-
-    # Validation 1: early exit if data coverage too low
-    signals_empty = not facts.get("signals")
-    price_empty = not (facts.get("price") or {}).get("current")
-    missing_count = len(facts.get("missing_data") or [])
-    if signals_empty and price_empty and missing_count > 5:
-        log("synthesize", "LOW_DATA_COVERAGE", f"signals=0, price=null, missing={missing_count}")
-        print(f"[synthesize] low data coverage (missing={missing_count}) — returning minimal report")
-        return _low_data_report(company_name, facts, total_time, api_call_count, models_used, total_tokens)
-
-    # ── Call 2: Judge ──────────────────────────────────────────────────────
-    _t2 = time.time()
-    try:
-        judgment, model2, tokens2 = judge(facts)
-        models_used.append(model2)
-        total_tokens += tokens2
-    except Exception as e:
-        log("synthesize", "JUDGE_FAIL", str(e))
-        print(f"[synthesize] judge failed: {e} — using fallback judgment")
-        judgment = {
-            "phase": "UNKNOWN",
-            "phase_reasoning": f"Judge step failed: {e}",
-            "momentum": "STEADY",
-            "bull_case": "",
-            "bear_case": "",
-            "risks": [],
-            "low_confidence": True,
-        }
-    _timing_judge = round(time.time() - _t2, 2)
-
-    # Validation 2: check bull/bear numbers are grounded in facts
-    _validate_case_numbers(judgment, facts)
-
-    # ── Call 3: Act ────────────────────────────────────────────────────────
-    _t3 = time.time()
-    try:
-        verdict, model3, tokens3 = recommend_action(facts, judgment)
-        models_used.append(model3)
-        total_tokens += tokens3
-    except Exception as e:
-        log("synthesize", "ACT_FAIL", str(e))
-        print(f"[synthesize] recommend_action failed: {e} — using fallback verdict")
-        verdict = {
-            "one_line": "Analysis incomplete — action step failed",
-            "bull_case": judgment.get("bull_case", ""),
-            "bear_case": judgment.get("bear_case", ""),
-            "wait_for": "No confirmed catalyst in current sources",
-            "wait_for_source": None,
-            "action": "research_deeper",
-            "confidence": "low",
-        }
-    _timing_act = round(time.time() - _t3, 2)
-
-    # Validation 3: ensure wait_for references a real upcoming_event
-    _validate_wait_for_source(verdict, facts)
-
-    # ── Call 4: Validate ───────────────────────────────────────────────────
-    _t4 = time.time()
-    try:
-        validated, model4, tokens4 = validate_verdict(facts, judgment, verdict)
-        models_used.append(model4)
-        total_tokens += tokens4
-        # Merge: original verdict as base, validated fields override
-        verdict = {**verdict, **validated}
-        if not verdict.get("wait_for"):
-            verdict["wait_for"] = "No confirmed catalyst in current sources"
-    except Exception as e:
-        log("synthesize", "VALIDATE_FAIL", str(e))
-        print(f"[synthesize] validate_verdict failed: {e} — using original verdict")
-    verdict = _enforce_word_limits(verdict)
-    _timing_validate = round(time.time() - _t4, 2)
-
-    result = _assemble(
-        company_name, facts, judgment, verdict,
-        total_time, api_call_count, models_used, total_tokens
-    )
-    # Stash LLM timings in metadata for run_research to extract
-    if "metadata" in result:
-        result["metadata"]["_timing_llm_extract"] = _timing_extract
-        result["metadata"]["_timing_llm_judge"] = _timing_judge
-        result["metadata"]["_timing_llm_act"] = _timing_act
-        result["metadata"]["_timing_llm_validate"] = _timing_validate
-    return result

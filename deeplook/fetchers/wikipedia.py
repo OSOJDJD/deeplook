@@ -10,7 +10,13 @@ async def fetch_wikipedia(company_name: str) -> dict:
         return cached
 
     slug = company_name.replace(" ", "_")
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
+    # Use MediaWiki action API with exintro=true to get the full intro section
+    # (REST summary /page/summary/ only returns a 3-sentence snippet)
+    url = (
+        "https://en.wikipedia.org/w/api.php"
+        f"?action=query&prop=extracts|description&exintro=true&explaintext=true"
+        f"&titles={slug}&format=json&redirects=1"
+    )
 
     try:
         headers = {
@@ -21,13 +27,18 @@ async def fetch_wikipedia(company_name: str) -> dict:
             resp = await client.get(url)
             if resp.status_code == 200:
                 data = resp.json()
-                extract = data.get("extract", "")
+                pages = (data.get("query") or {}).get("pages") or {}
+                page = next(iter(pages.values()), {})
+                if page.get("missing") is not None:
+                    return {"source": "wikipedia", "success": False, "error": "page not found"}
+                extract = page.get("extract", "")
+                description = page.get("description", "") or ""
                 result = {
                     "source": "wikipedia",
                     "success": True,
-                    "title": data.get("title", ""),
+                    "title": page.get("title", ""),
                     "extract": extract[:3000],
-                    "description": data.get("description", ""),
+                    "description": description,
                 }
                 set_cache(key, result)
                 return result

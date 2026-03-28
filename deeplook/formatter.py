@@ -57,590 +57,6 @@ def _section_header(title: str, bold_mode: str = "ansi") -> str:
     return f"\n {_b(title, bold_mode)}"
 
 
-def format_report(data: dict, bold_mode: str = "ansi") -> None:
-    """Print a human-readable report to stdout from a research result dict."""
-
-    # Support both top-level judgment (from run_research) and raw judgment dict
-    j = data.get("judgment", data)
-
-    # P0-4: handle error dict from synthesize() — never attempt to format a broken judgment
-    if "error" in j:
-        print(f"\n{DIVIDER}")
-        print(f"  [PIPELINE ERROR] Report generation failed")
-        print(f"  {j['error']}")
-        meta = j.get("metadata", {})
-        if meta:
-            print(f"  LLM: {meta.get('llm_model_used', 'unknown')}  |  "
-                  f"Time: {meta.get('total_time_seconds', '?')}s")
-        print(DIVIDER)
-        return
-
-    overview = j.get("overview", {})
-    market = j.get("market_data", {})
-    funding = j.get("funding", {})
-    signals = j.get("recent_signals", [])
-    ai = j.get("ai_judgment", {})
-    valuation = j.get("valuation", {})
-    competitive = j.get("competitive_landscape", {})
-    meta = j.get("metadata", {})
-
-    # ── Header ──────────────────────────────────────────────────────────────
-    name = j.get("company_name") or data.get("company", "Unknown")
-    entity_type = data.get("entity_type", "") or j.get("entity_type", "")
-    price = market.get("price")
-    trend = market.get("30d_trend", "")
-    mcap = market.get("market_cap", "")
-    key_metrics_hdr = market.get("key_metrics") or market.get("key_metric", "")
-    sector = overview.get("sector", "")
-    founded = overview.get("founded", "")
-    stage = overview.get("stage", "")
-    phase = ai.get("company_phase", "")
-    momentum = ai.get("momentum", "")
-
-    def _trunc(s: str, n: int) -> str:
-        s = str(s)
-        return s if len(s) <= n else s[:n - 1] + "…"
-
-    def _metric_val(metrics, *keywords) -> str:
-        """Extract value from key_metrics array matching any keyword."""
-        if not isinstance(metrics, list):
-            return ""
-        for m in metrics:
-            m_str = str(m)
-            for kw in keywords:
-                if kw.lower() in m_str.lower() and ":" in m_str:
-                    return m_str.split(":", 1)[1].strip()
-        return ""
-
-    # Build entity-type-aware header parts (omit field if data missing)
-    hdr_parts = [name]
-    if entity_type == "public_equity":
-        if price:
-            hdr_parts.append(f"${price}")
-        if not _is_empty(trend):
-            hdr_parts.append(trend)
-        if not _is_empty(mcap):
-            hdr_parts.append(f"MCap {mcap}")
-    elif entity_type == "exchange":
-        if not _is_empty(founded):
-            hdr_parts.append(f"Est. {founded}")
-        users = _metric_val(key_metrics_hdr, "users")
-        if users:
-            hdr_parts.append(users)
-        lic = _metric_val(key_metrics_hdr, "licenses", "license", "jurisdiction")
-        if lic:
-            hdr_parts.append(lic)
-    elif entity_type == "venture_capital":
-        fund = _metric_val(key_metrics_hdr, "fund", "aum")
-        if fund:
-            hdr_parts.append(fund)
-        focus = _metric_val(key_metrics_hdr, "focus")
-        if focus:
-            hdr_parts.append(focus)
-    elif entity_type == "foundation":
-        tvl = _metric_val(key_metrics_hdr, "tvl")
-        if tvl:
-            hdr_parts.append(f"TVL {tvl}")
-        if not _is_empty(founded):
-            hdr_parts.append(f"Est. {founded}")
-        if not _is_empty(mcap):
-            hdr_parts.append(f"MCap {mcap}")
-    elif entity_type == "crypto":
-        if price:
-            hdr_parts.append(f"${price}")
-        if not _is_empty(trend):
-            hdr_parts.append(trend)
-        if not _is_empty(mcap):
-            hdr_parts.append(f"MCap {mcap}")
-        tvl = _metric_val(key_metrics_hdr, "tvl")
-        if tvl:
-            hdr_parts.append(f"TVL {tvl}")
-    else:  # private
-        val = funding.get("total_raised", "")
-        if not _is_empty(val):
-            hdr_parts.append(val)
-        if not _is_empty(founded):
-            hdr_parts.append(f"Est. {founded}")
-
-    hdr_parts[0] = _b(hdr_parts[0], bold_mode)
-    print(DIVIDER)
-    header_line = " " + "  |  ".join(hdr_parts)
-    print(header_line)
-    sub_parts = []
-    if not _is_empty(sector):
-        sub_parts.append(_trunc(sector, 50))
-    if not _is_empty(founded):
-        sub_parts.append(f"Est. {_trunc(founded, 10)}")
-    phase_str = f"{_trunc(stage, 25)} ● {_trunc(phase, 20)} / {_trunc(momentum, 20)}"
-    sub_parts.append(phase_str)
-    print(" " + "  |  ".join(sub_parts))
-    print(DIVIDER)
-
-    # ── Key Signals ─────────────────────────────────────────────────────────
-    if signals:
-        print(_section_header("⚡ KEY SIGNALS", bold_mode))
-        sorted_signals = sorted(
-            signals,
-            key=lambda s: s.get("date", "") or "",
-            reverse=True,
-        )[:3]  # max 3 signals
-        for sig in sorted_signals:
-            icon = _sentiment_icon(sig.get("sentiment", ""))
-            date_str = sig.get("date", "")
-            summary = sig.get("summary", "")
-            so_what = sig.get("so_what", "")
-            # Wrap long signal summaries, aligning continuation at col 10
-            sig_prefix = f" {icon} {date_str} — "
-            wrapped_summary = textwrap.wrap(summary, width=WIDTH - len(sig_prefix))
-            if wrapped_summary:
-                print(sig_prefix + _b(wrapped_summary[0], bold_mode))
-                for extra in wrapped_summary[1:]:
-                    print(" " * 10 + _b(extra, bold_mode))
-            else:
-                print(sig_prefix)
-            # so_what: show Watch part, wrapped (no truncation)
-            if so_what and not _is_empty(so_what):
-                if "Watch:" in so_what:
-                    watch_part = so_what.split("Watch:", 1)[1].strip()
-                    prefix = "→ Watch: "
-                elif "→" in so_what:
-                    watch_part = so_what.rsplit("→", 1)[-1].strip()
-                    prefix = "→ "
-                else:
-                    watch_part = ""
-                    prefix = ""
-                if watch_part:
-                    print(_wrap(f"{prefix}{watch_part}", indent=10))
-
-    # ── Competitive Position (MARKET POSITION + PEER COMPARISON) ────────────
-    key_metrics_raw = market.get("key_metrics") or market.get("key_metric", "")
-    one_liner = overview.get("one_liner", "")
-    team_size = overview.get("team_size", "")
-    hq = overview.get("hq_location", "")
-    comp_note = competitive.get("comparison_note", "")
-    comp_peers = competitive.get("main_competitors", [])
-    peers = data.get("peer_comparison") or []
-
-    if entity_type == "venture_capital":
-        market_title = "📊 PORTFOLIO"
-    elif entity_type == "foundation":
-        market_title = "📊 ON-CHAIN METRICS"
-    else:
-        market_title = "📊 COMPETITIVE POSITION"
-
-    has_market_content = (
-        not _is_empty(one_liner)
-        or (isinstance(key_metrics_raw, list) and any(not _is_empty(m) for m in key_metrics_raw))
-        or (not isinstance(key_metrics_raw, list) and not _is_empty(key_metrics_raw))
-        or not _is_empty(team_size)
-        or not _is_empty(hq)
-        or comp_peers
-        or not _is_empty(comp_note)
-        or (peers and entity_type == "public_equity")
-    )
-
-    if has_market_content:
-        print(_section_header(market_title, bold_mode))
-
-        if not _is_empty(one_liner):
-            # First sentence only, truncated to one line
-            first_sent = str(one_liner).split(". ")[0].strip()
-            if first_sent and not first_sent.endswith("."):
-                first_sent += "."
-            max_len = WIDTH - 4  # 3-char indent + buffer
-            if len(first_sent) > max_len:
-                first_sent = first_sent[:max_len - 1] + "…"
-            print(_wrap(first_sent))
-
-        # key_metrics: aligned "Label:  Value" display
-        # For public_equity, skip: (a) technical indicators (shown in tech rows below)
-        #                          (b) valuation ratios (shown in VALUATION section)
-        _TECH_SKIP = {"52-week", "52w", "50-day", "200-day", "moving average",
-                      "50d", "200d", "rsi", "52 week"}
-        _VAL_SKIP = {"p/e", "pe ratio", "pe:", "trailing pe", "forward pe",
-                     "price/sales", "price-to-sales", "p/s", "ev/ebitda",
-                     "price to sales", "analyst target", "analyst price"}
-        km_has_employees = False
-        if isinstance(key_metrics_raw, list):
-            km_items = []
-            for m in key_metrics_raw:
-                if not _is_empty(m):
-                    m_str = str(m)
-                    m_lc = m_str.lower()
-                    # Skip technical indicator rows (shown below in tech rows)
-                    if entity_type == "public_equity" and any(
-                        kw in m_lc for kw in _TECH_SKIP
-                    ):
-                        continue
-                    # Skip valuation ratios (shown in VALUATION section)
-                    if entity_type == "public_equity" and any(
-                        kw in m_lc for kw in _VAL_SKIP
-                    ):
-                        continue
-                    if ":" in m_str:
-                        lbl, val = m_str.split(":", 1)
-                        lbl_s, val_s = lbl.strip(), val.strip()
-                        if not _is_empty(val_s):
-                            if "employee" in lbl_s.lower():
-                                km_has_employees = True
-                            km_items.append((lbl_s, val_s))
-                    else:
-                        km_items.append(("", m_str))
-            if km_items:
-                lbl_w = max((len(lbl) for lbl, _ in km_items if lbl), default=0)
-                for lbl, val in km_items:
-                    if lbl:
-                        print(f"   {(lbl + ':'):<{lbl_w + 1}} {val}")
-                    else:
-                        print(_wrap(val))
-        elif not _is_empty(key_metrics_raw):
-            print(_wrap(f"Key metric: {key_metrics_raw}"))
-
-        # Only show team_size if Employees not already in key_metrics
-        if not km_has_employees and not _is_empty(team_size):
-            print(_wrap(f"Team size: {team_size}"))
-        # HQ: skip if not available
-        if not _is_empty(hq):
-            print(_wrap(f"HQ: {hq}"))
-
-        if entity_type == "venture_capital":
-            peer_label = "Co-investors"
-        elif entity_type == "exchange":
-            peer_label = "vs exchanges"
-        else:
-            peer_label = "Competitors"
-
-        if comp_peers:
-            print()
-            print(_wrap(f"{peer_label}: {', '.join(comp_peers[:3])}"))  # max 3
-
-        if not _is_empty(comp_note):
-            note_str = str(comp_note)
-            first_line = note_str.split("\n")[0].strip()
-            first_line = re.split(r'\.\s+(?=vs\b)', first_line)[0].strip()
-            print(_wrap(f"vs peers: {first_line}", subsequent_indent=10))
-
-        # Technical data (public_equity only) — shown here, no separate section
-        if entity_type == "public_equity":
-            tech = data.get("technical_snapshot") or {}
-            if tech:
-                high52 = tech.get("52w_high")
-                low52 = tech.get("52w_low")
-                pct_from_high = tech.get("pct_from_high")
-                ma50 = tech.get("50d_ma")
-                ma200 = tech.get("200d_ma")
-                rsi = tech.get("rsi14")
-                if any(v is not None for v in [high52, low52, ma50, ma200, rsi]):
-                    print("   " + "─" * 40)
-                    row1_parts = []
-                    if high52 is not None:
-                        row1_parts.append(f"52w High: ${high52:,.2f}")
-                    if low52 is not None:
-                        row1_parts.append(f"52w Low: ${low52:,.2f}")
-                    if pct_from_high is not None:
-                        row1_parts.append(f"vs ATH: {pct_from_high:+.1f}%")
-                    if row1_parts:
-                        print("   " + "  │  ".join(row1_parts))
-                    row2_parts = []
-                    if ma50 is not None:
-                        row2_parts.append(f"50d MA:  ${ma50:,.2f}")
-                    if ma200 is not None:
-                        row2_parts.append(f"200d MA: ${ma200:,.2f}")
-                    if rsi is not None:
-                        rsi_tag = " ⚠️ overbought" if rsi > 70 else (" ⚠️ oversold" if rsi < 30 else "")
-                        row2_parts.append(f"RSI(14): {_b(str(rsi), bold_mode)}{rsi_tag}")
-                    if row2_parts:
-                        print("   " + "  │  ".join(row2_parts))
-
-        # Peer comparison table — inline under COMPETITIVE POSITION
-        if peers and entity_type == "public_equity":
-            yf_raw = (data.get("fetcher_results") or {}).get("yfinance") or {}
-            yf_d = yf_raw.get("data") or {}
-            target_row = {
-                "ticker": yf_d.get("symbol") or name,
-                "name": name,
-                "price": market.get("price"),
-                "market_cap": yf_d.get("market_cap"),
-                "trailingPE": yf_d.get("trailingPE"),
-                "priceToSalesTrailing12Months": yf_d.get("priceToSalesTrailing12Months"),
-                "revenueGrowth": yf_d.get("revenue_growth"),
-                "grossMargins": yf_d.get("grossMargins"),
-                "_is_target": True,
-            }
-            all_rows = [target_row] + peers[:2]  # max 2 peers
-
-            def _fmt_price(v):
-                if v is None:
-                    return "  —  "
-                if v >= 1e12:
-                    return f"${v/1e12:.2f}T"
-                if v >= 1e9:
-                    return f"${v/1e9:.1f}B"
-                if v >= 1e6:
-                    return f"${v/1e6:.0f}M"
-                return f"${v:.2f}"
-
-            def _fmt_mult(v):
-                if v is None:
-                    return " —  "
-                return f"{v:.1f}x"
-
-            def _fmt_pct(v):
-                if v is None:
-                    return "  — "
-                return f"{v*100:+.0f}%"
-
-            hdr = f"  {'Ticker':<8} {'Price':>7}  {'MCap':>7}  {'P/E':>6}  {'P/S':>6}  {'RevGr':>6}  {'GrMgn':>6}"
-            print(hdr)
-            print(f"  {'─'*8} {'─'*7}  {'─'*7}  {'─'*6}  {'─'*6}  {'─'*6}  {'─'*6}")
-            for row in all_rows:
-                ticker = str(row.get("ticker") or "?")[:8]
-                marker = " ◀" if row.get("_is_target") else "  "
-                price_s = f"${row['price']:.2f}" if row.get("price") else "  —  "
-                mcap_s = _fmt_price(row.get("market_cap"))
-                pe_s = _fmt_mult(row.get("trailingPE"))
-                ps_s = _fmt_mult(row.get("priceToSalesTrailing12Months"))
-                rev_s = _fmt_pct(row.get("revenueGrowth"))
-                gm_s = _fmt_pct(row.get("grossMargins"))
-                print(f"  {ticker:<8} {price_s:>7}  {mcap_s:>7}  {pe_s:>6}  {ps_s:>6}  {rev_s:>6}  {gm_s:>6}{marker}")
-
-    # ── Valuation ────────────────────────────────────────────────────────────
-    val_lines = []
-
-    total_raised = funding.get("total_raised", "")
-    last_round = funding.get("last_round", "")
-    investors = funding.get("key_investors", [])
-
-    regime_a = valuation.get("REGIME_A_public_equity_only", {})
-    regime_b = valuation.get("REGIME_B_crypto_only") or valuation.get("REGIME_B_crypto") or {}
-
-    if regime_a:
-        for key, label in [
-            ("pe_ratio", "P/E ratio"),
-            ("price_to_sales", "Price/Sales"),
-            ("analyst_target_price", "Analyst target"),
-        ]:
-            v = regime_a.get(key, "")
-            if not _is_empty(v):
-                if key == "analyst_target_price":
-                    target_s = str(v).lstrip("$").split()[0].replace(",", "")
-                    try:
-                        target_f = float(target_s)
-                        curr = market.get("price")
-                        if curr:
-                            upside = (target_f / float(curr) - 1) * 100
-                            display = f"{_b(str(v), bold_mode)} ({upside:+.1f}% upside)"
-                        else:
-                            display = _b(str(v), bold_mode)
-                    except (ValueError, TypeError):
-                        display = _b(str(v), bold_mode)
-                else:
-                    display = str(v)
-                val_lines.append(f"{label}: {display}")
-        # vs Peers P/E — computed from peer comparison data
-        if peers:
-            peer_pes = [p.get("trailingPE") for p in peers[:2] if p.get("trailingPE") is not None]
-            if peer_pes:
-                avg_pe = sum(peer_pes) / len(peer_pes)
-                peer_pe_str = " / ".join(f"{p:.1f}x" for p in peer_pes)
-                val_lines.append(f"vs Peers P/E: avg {avg_pe:.1f}x ({peer_pe_str})")
-
-    if regime_b:
-        for key, label in [
-            ("fully_diluted_valuation", "FDV"), ("market_cap_to_tvl", "MCap/TVL"),
-            ("protocol_revenue_annual", "Protocol revenue (annual)"), ("upcoming_unlocks", "Upcoming unlocks"),
-        ]:
-            v = regime_b.get(key, "")
-            if not _is_empty(v):
-                val_lines.append(f"{label}: {v}")
-
-    if val_lines:
-        if entity_type == "public_equity":
-            val_section_title = "💰 VALUATION"
-        elif entity_type == "venture_capital":
-            val_section_title = "💵 FUND STATUS"
-        else:
-            val_section_title = "💰 FUNDING"
-        print(_section_header(val_section_title, bold_mode))
-        for line in val_lines:
-            print(_wrap(line))
-
-    # ── Ownership & Funding ───────────────────────────────────────────────────
-    ownership_lines = []
-    if entity_type == "public_equity":
-        if investors:
-            if isinstance(investors, list):
-                inv_str = ", ".join(str(i) for i in investors[:3])
-            else:
-                inv_str = str(investors)
-            ownership_lines.append(f"Top holders: {inv_str}")
-    else:
-        if not _is_empty(total_raised):
-            ownership_lines.append(f"Total raised: {total_raised}")
-        if not _is_empty(last_round):
-            ownership_lines.append(f"Last round: {last_round}")
-        if investors:
-            if isinstance(investors, list):
-                inv_str = ", ".join(str(i) for i in investors[:3])
-            else:
-                inv_str = str(investors)
-            ownership_lines.append(f"Investors: {inv_str}")
-
-    if ownership_lines:
-        if entity_type == "public_equity":
-            own_section_title = "🏦 OWNERSHIP"
-        elif entity_type == "exchange":
-            own_section_title = "💵 SHAREHOLDERS"
-        else:
-            own_section_title = "💵 OWNERSHIP & FUNDING"
-        print(_section_header(own_section_title, bold_mode))
-        for line in ownership_lines:
-            print(_wrap(line, subsequent_indent=10))
-
-    # ── Catalysts & Risks (UPCOMING CATALYSTS + FORWARD LOOKING + RISKS) ────
-    forward = ai.get("forward_looking", [])
-    catalysts = j.get("upcoming_catalysts") or []
-    risks = ai.get("risk_signals", [])
-
-    has_catalysts_risks = (
-        catalysts
-        or any(not _is_empty(f) for f in forward)
-        or any(not _is_empty(r) for r in risks)
-    )
-
-    if has_catalysts_risks:
-        print(_section_header("📅 CATALYSTS & RISKS", bold_mode))
-        # Collect catalyst event keywords for dedup
-        cat_events_shown = []  # full event text for dedup
-        shown_cats = 0
-        for c in catalysts:
-            if shown_cats >= 2:
-                break
-            dt = c.get("date", "TBD")
-            event = c.get("event", "")
-            if _is_empty(dt) or _is_empty(event):
-                continue
-            cat_events_shown.append(event.lower())
-            why = c.get("why_it_matters", "")
-            print(f"   {dt}  {event}")
-            if why and not _is_empty(why):
-                why_s = str(why).split("\n")[0].strip()
-                print(_wrap(f"→ {why_s}", indent=10))
-            shown_cats += 1
-        # forward_looking: skip if it duplicates a catalyst event (word-overlap check)
-        _STOP = {"the", "a", "an", "and", "or", "of", "in", "at", "to", "for", "on",
-                 "is", "are", "be", "its", "with", "by", "will", "from"}
-        def _kw(s):
-            import re as _re
-            return set(_re.findall(r'\w+', s.lower())) - _STOP
-        for item in forward:
-            if _is_empty(item):
-                continue
-            item_words = _kw(str(item))
-            dup = False
-            for ev in cat_events_shown:
-                if len(item_words & _kw(ev)) >= 2:
-                    dup = True
-                    break
-            if dup:
-                continue
-            print(_wrap(f"• {item}"))
-        shown_risks = 0
-        for r in risks:
-            if shown_risks >= 2:
-                break
-            if not _is_empty(r):
-                print(_wrap(f"⚠️  {r}", subsequent_indent=10))
-                shown_risks += 1
-
-    # ── Verdict ─────────────────────────────────────────────────────────────
-    verdict = ai.get("verdict", {})
-    # Graceful fallback: old format used recommended_action + wait_for at top level
-    if not verdict:
-        old_action = ai.get("recommended_action", "")
-        old_wait = ai.get("wait_for", "")
-        if old_action or old_wait:
-            verdict = {"one_line": old_action, "wait_for": old_wait}
-
-    if verdict:
-        print(_section_header("🎯 VERDICT", bold_mode))
-        one_line = verdict.get("one_line", "")
-        bull = verdict.get("bull_case", "")
-        bear = verdict.get("bear_case", "")
-        wait = verdict.get("wait_for", "")
-        entry = verdict.get("entry_trigger", "")
-        risk_trigger = verdict.get("risk_trigger", "")
-        peer_ctx = verdict.get("peer_context", "")
-        if not _is_empty(one_line):
-            print(_wrap(one_line))
-        if not _is_empty(bull):
-            print(_wrap(f"🟢 {bull}", subsequent_indent=10))
-        if not _is_empty(bear):
-            print(_wrap(f"🔴 {bear}", subsequent_indent=10))
-        if not _is_empty(wait):
-            print(_wrap(f"⏳ {wait}"))
-        if not _is_empty(entry):
-            print(_wrap(f"▶ Entry: {entry}", subsequent_indent=10))
-        if not _is_empty(risk_trigger):
-            print(_wrap(f"⚠ Exit if: {risk_trigger}", subsequent_indent=10))
-        if not _is_empty(peer_ctx):
-            print(_wrap(f"📊 {peer_ctx}"))
-
-    # ── Footer ───────────────────────────────────────────────────────────────
-    succeeded = len(data.get("sources_succeeded", []))
-    elapsed = data.get("elapsed_seconds", meta.get("total_time_seconds", "?"))
-
-    print(DIVIDER)
-    print(f" Sources: {succeeded} | {elapsed}s")
-    print(f" 📊 Generated by DeepLook — Free AI company research | github.com/OSOJDJD/deeplook")
-    print(f"{DIVIDER}\n")
-
-
-def format_layer1(data: dict, bold_mode: str = "ansi") -> None:
-    """Print compact Layer 1 summary (5-8 lines) for README demo / quick view."""
-    j = data.get("judgment", data)
-    if "error" in j:
-        print(f"[ERROR] {j['error']}")
-        return
-
-    overview = j.get("overview", {})
-    market = j.get("market_data", {})
-    ai = j.get("ai_judgment", {})
-    signals = j.get("recent_signals", [])
-    verdict = ai.get("verdict", {})
-
-    name = j.get("company_name") or data.get("company", "Unknown")
-    yf_d = ((data.get("fetcher_results") or {}).get("yfinance") or {}).get("data") or {}
-    ticker = yf_d.get("symbol") or overview.get("stage", "")
-    phase = ai.get("company_phase", "")
-    momentum = ai.get("momentum", "")
-
-    ticker_str = f" ({ticker})" if ticker and ticker.upper() != name.upper() else ""
-    phase_str = f"{phase} / {momentum}" if momentum else phase
-
-    top3 = sorted(signals, key=lambda s: s.get("date", "") or "", reverse=True)[:3]
-
-    print(f"\n{DIVIDER}")
-    print(f"  {_b(name, bold_mode)}{ticker_str}  {phase_str}")
-    print(THIN)
-    for sig in top3:
-        icon = _sentiment_icon(sig.get("sentiment", ""))
-        summary = sig.get("summary", "")
-        print(f"  {icon} {_b(summary, bold_mode)}")
-    print(THIN)
-    one_line = verdict.get("one_line", "")
-    bull = verdict.get("bull_case", "")
-    bear = verdict.get("bear_case", "")
-    if not _is_empty(one_line):
-        print(f"  {one_line}")
-    if not _is_empty(bull):
-        print(f"  {_b('🟢', bold_mode)} {bull}")
-    if not _is_empty(bear):
-        print(f"  {_b('🔴', bold_mode)} {bear}")
-    print(DIVIDER)
-    print()
-
-
 def format_lookup_markdown(data: dict) -> str:
     """Compact markdown snapshot for deeplook_lookup — works with v2 and v1 pipeline output."""
     is_v2 = data.get("_version") == "2.0"
@@ -1622,6 +1038,384 @@ def main():
         sys.exit(1)
 
     format_report(data)
+
+
+def build_structured_json_v3(data: dict) -> dict:
+    """Assemble clean v3 JSON schema from v3 pipeline output."""
+    import json as _json
+    from datetime import date as _date
+
+    sd = data.get("structured_data") or {}
+    v3 = sd.get("_v3") or {}
+    cm = data.get("compressed") or {}
+    et = data.get("entity_type", "") or sd.get("entity_type", "")
+
+    result = {
+        "version": "3.0",
+
+        # 1. IDENTITY
+        "identity": {
+            "name": data.get("company", ""),
+            "entity_type": et,
+            "sector": (v3.get("identity") or {}).get("sector"),
+            "description": cm.get("description"),
+            "founded": (v3.get("identity") or {}).get("founded"),
+            "headquarters": (v3.get("identity") or {}).get("headquarters"),
+        },
+
+        # 2. SCALE
+        "scale": {
+            "employees": (v3.get("scale") or {}).get("employees"),
+            "revenue": (v3.get("scale") or {}).get("revenue"),
+            "market_cap": (v3.get("scale") or {}).get("market_cap"),
+            "valuation": None,
+            "valuation_source": None,
+            "valuation_date": None,
+            "funding_total": (sd.get("funding") or {}).get("total_raised"),
+        },
+
+        # 3. PEOPLE
+        "people": {
+            "ceo": (v3.get("people") or {}).get("ceo"),
+            "founders": cm.get("founders") or [],
+            "key_people": [],
+        },
+
+        # 4. SIGNALS
+        "signals": {
+            "events": cm.get("events") or [],
+            "context": cm.get("context") or [],
+        },
+
+        # 5. PEERS
+        "peers": sd.get("peers") or [],
+
+        # 6. OUTLOOK
+        "outlook": {
+            "catalysts": cm.get("catalysts") or [],
+            "next_event": (v3.get("outlook") or {}).get("next_event"),
+            "next_event_date": (v3.get("outlook") or {}).get("next_event_date"),
+        },
+
+        # 7. VERDICT
+        "verdict": cm.get("verdict") or {},
+
+        # 8. META
+        "meta": {
+            "sources": data.get("sources_succeeded") or [],
+            "sources_ok": len(data.get("sources_succeeded") or []),
+            "sources_failed": len(data.get("sources_failed") or []),
+            "freshness": str(_date.today()),
+            "generation_time_sec": round(data.get("elapsed_seconds") or 0, 1),
+            "schema_version": "3.0",
+        },
+
+        # 9. MODULES
+        "modules": {
+            "financial": None,
+            "crypto": None,
+        },
+    }
+
+    # Fill private company valuation from LLM extraction
+    val_extract = cm.get("valuation_extract")
+    if val_extract and isinstance(val_extract, dict):
+        result["scale"]["valuation"] = val_extract.get("value")
+        result["scale"]["valuation_source"] = val_extract.get("source")
+        result["scale"]["valuation_date"] = val_extract.get("date")
+
+    # Fill financial module (public_equity only)
+    if et == "public_equity":
+        result["modules"]["financial"] = {
+            "price": sd.get("price") or {},
+            "valuation": sd.get("valuation") or {},
+            "technicals": sd.get("technicals") or {},
+            "margins": ((v3.get("modules") or {}).get("financial") or {}).get("margins") or {},
+        }
+
+    # Fill crypto module
+    if et == "crypto":
+        result["modules"]["crypto"] = (v3.get("modules") or {}).get("crypto") or {}
+
+    return result
+
+
+def format_output_v3(data: dict) -> str:
+    """v3 pipeline: clean markdown output + embedded JSON."""
+    import json as _json
+
+    sj = build_structured_json_v3(data)
+
+    identity = sj["identity"]
+    scale = sj["scale"]
+    people = sj["people"]
+    signals = sj["signals"]
+    peers = sj["peers"]
+    outlook = sj["outlook"]
+    verdict = sj["verdict"]
+    meta = sj["meta"]
+    modules = sj["modules"]
+
+    lines = []
+
+    # === HEADER ===
+    ticker = data.get("ticker")
+    if ticker:
+        lines.append(f"## {identity['name']} ({ticker})")
+    else:
+        lines.append(f"## {identity['name']}")
+
+    # Subheader: sector · industry · founded · employees
+    sd_raw = data.get("structured_data") or {}
+    industry = (sd_raw.get("company_meta") or {}).get("industry") or (sd_raw.get("_v3") or {}).get("identity", {}).get("industry")
+    parts = []
+    if identity.get("sector"):
+        parts.append(identity["sector"])
+    if industry and industry != identity.get("sector"):
+        parts.append(industry)
+    if identity.get("founded"):
+        parts.append(f"Founded {identity['founded']}")
+    emp = scale.get("employees")
+    if emp:
+        try:
+            emp_int = int(emp)
+            parts.append(f"{emp_int // 1000}K people" if emp_int >= 1000 else f"{emp_int} people")
+        except (TypeError, ValueError):
+            pass
+    if parts:
+        lines.append(" · ".join(parts))
+
+    # Scale line: market cap / valuation + revenue + funding
+    scale_parts = []
+    if scale.get("market_cap"):
+        scale_parts.append(f"Market cap: {scale['market_cap']}")
+    elif scale.get("valuation"):
+        scale_parts.append(f"Valuation: {scale['valuation']} ({scale.get('valuation_source') or 'estimated'})")
+    if scale.get("revenue"):
+        scale_parts.append(f"Revenue: {scale['revenue']}")
+    if scale.get("funding_total"):
+        scale_parts.append(f"Raised: {scale['funding_total']}")
+    if scale_parts:
+        lines.append(" · ".join(scale_parts))
+
+    ceo_name = people.get("ceo") or ""
+    if ceo_name:
+        for prefix in ["Mr. ", "Mrs. ", "Ms. ", "Dr. "]:
+            ceo_name = ceo_name.replace(prefix, "")
+        ceo_name = ceo_name.strip()
+        if ceo_name:
+            lines.append(f"CEO: {ceo_name}")
+
+    lines.append("")
+
+    # === WHAT'S HAPPENING ===
+    events = signals.get("events") or []
+    if events:
+        lines.append("## What's happening")
+        for event in events[:5]:
+            date_str = event.get("date", "")
+            summary = event.get("summary", "")
+            lines.append(f"- [{date_str}] {summary}")
+        lines.append("")
+
+    # === CONTEXT (what / so what / but what) ===
+    context = signals.get("context") or []
+    if len(context) >= 1:
+        lines.append("## So what")
+        lines.append(context[0])
+        lines.append("")
+    if len(context) >= 2:
+        lines.append(context[1])
+        lines.append("")
+    if len(context) >= 3:
+        lines.append("## Watch out")
+        lines.append(context[2])
+        lines.append("")
+
+    # === PEERS ===
+    if peers:
+        lines.append("## Compared to")
+        if modules.get("financial") and peers:
+            lines.append("| Company | P/E | Rev Growth | Margin | RSI-14 |")
+            lines.append("|---------|-----|-----------|--------|--------|")
+            for p in peers[:5]:
+                pe = p.get("pe", "N/A")
+                if isinstance(pe, (int, float)):
+                    pe = f"{pe:.1f}"
+                rg = p.get("rev_growth_pct")
+                rg_str = f"+{rg*100:.1f}%" if rg and rg > 0 else (f"{rg*100:.1f}%" if rg else "N/A")
+                gm = p.get("gross_margin_pct")
+                gm_str = f"{gm*100:.1f}%" if gm else "N/A"
+                rsi = p.get("rsi_14", "N/A")
+                if isinstance(rsi, (int, float)):
+                    rsi = f"{rsi:.1f}"
+                lines.append(f"| {p.get('name', '')} | {pe} | {rg_str} | {gm_str} | {rsi} |")
+        lines.append("")
+
+    # === COMING UP ===
+    catalysts = outlook.get("catalysts") or []
+    next_event = outlook.get("next_event")
+    if catalysts or next_event:
+        lines.append("## Coming up")
+        if next_event:
+            lines.append(f"→ {next_event} ({outlook.get('next_event_date', '')})")
+        for cat in catalysts[:4]:
+            lines.append(f"→ {cat}")
+        lines.append("")
+
+    # === VERDICT ===
+    if verdict:
+        lines.append("## Verdict")
+        one_line = verdict.get("one_line", "")
+        momentum = verdict.get("momentum", "")
+        lines.append(f"**{one_line}** ({momentum})")
+        tailwind = verdict.get("tailwind", "")
+        headwind = verdict.get("headwind", "")
+        watch_for = verdict.get("watch_for", "")
+        if tailwind:
+            lines.append(f"↑ {tailwind}")
+        if headwind:
+            lines.append(f"↓ {headwind}")
+        if watch_for:
+            lines.append(f"⏳ {watch_for}")
+        lines.append("")
+
+    # === FINANCIAL DETAILS ===
+    fin = modules.get("financial")
+    if fin:
+        lines.append("## Financial details")
+        price_data = fin.get("price") or {}
+        val_data = fin.get("valuation") or {}
+        tech_data = fin.get("technicals") or {}
+        margins_data = fin.get("margins") or {}
+
+        price_parts = []
+        if price_data.get("current"):
+            price_parts.append(f"Price: ${price_data['current']}")
+        _change_1d = price_data.get("change_1d") if price_data.get("change_1d") is not None else tech_data.get("change_1d")
+        if _change_1d is not None:
+            try:
+                price_parts.append(f"1D: {float(_change_1d):+.1f}%")
+            except (TypeError, ValueError):
+                pass
+        _change_30d = price_data.get("change_30d") if price_data.get("change_30d") is not None else tech_data.get("change_30d")
+        if _change_30d is not None:
+            try:
+                price_parts.append(f"30D: {float(_change_30d):+.1f}%")
+            except (TypeError, ValueError):
+                pass
+        if price_parts:
+            lines.append(" | ".join(price_parts))
+
+        range_parts = []
+        h52 = tech_data.get("high_52w")
+        l52 = tech_data.get("low_52w")
+        pos = tech_data.get("position_52w_pct")
+        if h52 and l52:
+            pos_str = f" ({pos:.1f}%)" if pos is not None else ""
+            range_parts.append(f"52W: ${l52} - ${h52}{pos_str}")
+        vol_ratio = tech_data.get("volume_ratio")
+        if vol_ratio is not None:
+            try:
+                range_parts.append(f"Vol: {float(vol_ratio):.2f}x avg")
+            except (TypeError, ValueError):
+                pass
+        if range_parts:
+            lines.append(" | ".join(range_parts))
+
+        val_parts = []
+        if val_data.get("pe_ratio"):
+            try:
+                val_parts.append(f"P/E: {float(val_data['pe_ratio']):.1f}")
+            except (TypeError, ValueError):
+                pass
+        if val_data.get("peg_ratio"):
+            try:
+                val_parts.append(f"PEG: {float(val_data['peg_ratio']):.2f}")
+            except (TypeError, ValueError):
+                pass
+        if val_data.get("ps_ratio"):
+            try:
+                val_parts.append(f"P/S: {float(val_data['ps_ratio']):.1f}")
+            except (TypeError, ValueError):
+                pass
+        if val_parts:
+            lines.append(" | ".join(val_parts))
+
+        tech_parts = []
+        if tech_data.get("rsi_14"):
+            try:
+                tech_parts.append(f"RSI: {float(tech_data['rsi_14']):.1f}")
+            except (TypeError, ValueError):
+                pass
+        if tech_data.get("ma50_signal"):
+            try:
+                tech_parts.append(f"MA50: {tech_data['ma50_signal']} ({float(tech_data.get('ma50_distance_pct', 0)):+.1f}%)")
+            except (TypeError, ValueError):
+                pass
+        if tech_data.get("ma200_signal"):
+            try:
+                tech_parts.append(f"MA200: {tech_data['ma200_signal']} ({float(tech_data.get('ma200_distance_pct', 0)):+.1f}%)")
+            except (TypeError, ValueError):
+                pass
+        if tech_parts:
+            lines.append(" | ".join(tech_parts))
+
+        margin_parts = []
+        if margins_data.get("revenue_growth_yoy"):
+            margin_parts.append(f"Rev Growth: {margins_data['revenue_growth_yoy']}")
+        if margins_data.get("gross_margin"):
+            try:
+                margin_parts.append(f"Gross: {float(margins_data['gross_margin'])*100:.1f}%")
+            except (TypeError, ValueError):
+                pass
+        if margins_data.get("operating_margin"):
+            try:
+                margin_parts.append(f"Op: {float(margins_data['operating_margin'])*100:.1f}%")
+            except (TypeError, ValueError):
+                pass
+        if margin_parts:
+            lines.append(" | ".join(margin_parts))
+
+        lines.append("")
+
+    # === CRYPTO DETAILS ===
+    crypto = modules.get("crypto")
+    if crypto:
+        lines.append("## Token details")
+        crypto_parts = []
+        if crypto.get("token_price"):
+            try:
+                crypto_parts.append(f"Price: ${float(crypto['token_price']):.2f}")
+            except (TypeError, ValueError):
+                pass
+        if crypto.get("market_cap"):
+            try:
+                crypto_parts.append(f"MCap: ${float(crypto['market_cap']):,.0f}")
+            except (TypeError, ValueError):
+                pass
+        if crypto.get("tvl"):
+            try:
+                crypto_parts.append(f"TVL: ${float(crypto['tvl']):,.0f}")
+            except (TypeError, ValueError):
+                pass
+        if crypto.get("mcap_tvl_ratio"):
+            try:
+                crypto_parts.append(f"MCap/TVL: {float(crypto['mcap_tvl_ratio']):.1f}")
+            except (TypeError, ValueError):
+                pass
+        if crypto_parts:
+            lines.append(" | ".join(crypto_parts))
+        lines.append("")
+
+    # === FOOTER ===
+    lines.append(f"*{meta['sources_ok']} sources · {meta['generation_time_sec']}s · DeepLook v3.0*")
+
+    # === EMBEDDED JSON ===
+    markdown = "\n".join(lines)
+    json_str = _json.dumps(sj, indent=2, ensure_ascii=False, default=str)
+
+    return markdown + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n"
 
 
 if __name__ == "__main__":

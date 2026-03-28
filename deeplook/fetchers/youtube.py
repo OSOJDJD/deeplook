@@ -147,7 +147,7 @@ def _fetch_youtube(query: str, max_results: int = 5,
     """
     Two-layer YouTube fetch:
       Layer 1 — metadata only (title, channel, date, views, description)
-                 filter: max_age_days, view_count > 1000
+                 filter: max_age_days, view_count > 100
       Layer 2 — targeted transcript for earnings calls / investor day videos only
                  keeps only keyword-relevant segments
     """
@@ -189,7 +189,7 @@ def _fetch_youtube(query: str, max_results: int = 5,
                 print(f"[strategy] youtube SKIP (too old): {title!r} ({upload_date})")
                 continue
 
-            if view_count < 1000:
+            if view_count < 100:
                 log("youtube", "SKIP_VIEWS", f"{title!r} views={view_count}")
                 print(f"[strategy] youtube SKIP (low views={view_count}): {title!r}")
                 continue

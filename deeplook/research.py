@@ -37,322 +37,46 @@ from deeplook.fetchers.search_strategy import (
     deduplicate_news,
     rank_articles,
 )
-from deeplook.judgment.synthesize import synthesize
-from deeplook.formatter import format_report, format_layer1
+from deeplook.debug_log import log
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
-# ── Defunct / collapsed companies (hardcoded) ─────────────────────────────
-# These are definitively dead — skip all financial detection, force DISTRESS phase.
-DEFUNCT_COMPANIES = {
-    "terra luna", "luna", "ftx", "wework", "theranos", "celsius",
-    "celsius network", "three arrows capital", "3ac", "voyager digital",
-    "blockfi", "genesis", "silvergate",
-}
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-# ── Disambiguation table — known name conflicts ────────────────────────────
-# When user searches these names, they almost certainly want the crypto asset,
-# not a small-cap stock that shares the ticker or company name.
-DISAMBIGUATION = {
-    "solana": {
-        "intended_type": "crypto",
-        "coin_id": "solana",
-        "skip_yfinance": True,
-        "note": "User wants SOL L1 blockchain, not Solana Company (HSDT)",
-    },
-    "ton": {
-        "intended_type": "crypto",
-        "coin_id": "the-open-network",
-        "skip_yfinance": True,
-        "note": "User wants TON blockchain, not Tokamak Network",
-    },
-    "ondo": {
-        "intended_type": "crypto",
-        "coin_id": "ondo",
-        "skip_yfinance": True,
-        "note": "User wants ONDO token, not any stock ticker",
-    },
-    "ripple": {
-        "intended_type": "crypto",
-        "coin_id": "ripple",
-        "skip_yfinance": True,
-        "note": "User wants XRP, not any stock",
-    },
-    "chainlink": {
-        "intended_type": "crypto",
-        "coin_id": "chainlink",
-        "skip_yfinance": True,
-        "note": "User wants LINK token",
-    },
-    "arbitrum": {
-        "intended_type": "crypto",
-        "coin_id": "arbitrum",
-        "skip_yfinance": True,
-        "note": "User wants ARB L2",
-    },
-    "jupiter": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Jupiter DEX on Solana",
-    },
-    "raydium": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Raydium DEX on Solana",
-    },
-    "canva": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "Canva design platform, private company",
-    },
-    "xai": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "xAI, Elon Musk's AI company",
-    },
-    "pendle": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Pendle Finance, yield trading protocol",
-    },
-    "eigenlayer": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "EigenLayer restaking protocol",
-    },
-    "lido": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Lido liquid staking",
-    },
-    "makerdao": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "MakerDAO / Sky Protocol",
-    },
-    "ethena": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Ethena Labs, USDe stablecoin",
-    },
-    "hyperliquid": {
-        "intended_type": "crypto",
-        "skip_yfinance": True,
-        "note": "Hyperliquid perpetual DEX",
-    },
-    "figma": {
-        "intended_type": "public_equity",
-        "ticker": "FIG",
-        "skip_yfinance": False,
-        "note": "Figma, design tool, IPO 2025",
-    },
-    # Preventive: common company names that could be mis-routed to crypto tokens
-    "tesla": {
-        "intended_type": "public_equity",
-        "ticker": "TSLA",
-        "skip_yfinance": False,
-        "note": "Tesla Inc (TSLA), EV and energy company",
-    },
-    "apple": {
-        "intended_type": "public_equity",
-        "ticker": "AAPL",
-        "skip_yfinance": False,
-        "note": "Apple Inc (AAPL), consumer electronics",
-    },
-    "amazon": {
-        "intended_type": "public_equity",
-        "ticker": "AMZN",
-        "skip_yfinance": False,
-        "note": "Amazon.com Inc (AMZN), e-commerce and cloud",
-    },
-    "meta": {
-        "intended_type": "public_equity",
-        "ticker": "META",
-        "skip_yfinance": False,
-        "note": "Meta Platforms (META), social media",
-    },
-    "google": {
-        "intended_type": "public_equity",
-        "ticker": "GOOGL",
-        "skip_yfinance": False,
-        "note": "Alphabet / Google (GOOGL), search and cloud",
-    },
-    "tsmc": {
-        "intended_type": "public_equity",
-        "ticker": "TSM",
-        "skip_yfinance": False,
-        "note": "TSMC (Taiwan Semiconductor) — use TSM ADR to avoid TWD currency mismatch",
-    },
-    # Semiconductor & tech companies — prevent misclassification when yfinance is flaky
-    "amd": {
-        "intended_type": "public_equity",
-        "ticker": "AMD",
-        "skip_yfinance": False,
-        "note": "Advanced Micro Devices (AMD), semiconductors",
-    },
-    "advanced micro devices": {
-        "intended_type": "public_equity",
-        "ticker": "AMD",
-        "skip_yfinance": False,
-        "note": "Advanced Micro Devices (AMD), semiconductors",
-    },
-    "broadcom": {
-        "intended_type": "public_equity",
-        "ticker": "AVGO",
-        "skip_yfinance": False,
-        "note": "Broadcom Inc (AVGO), semiconductors and infrastructure software",
-    },
-    "fabrinet": {
-        "intended_type": "public_equity",
-        "ticker": "FN",
-        "skip_yfinance": False,
-        "note": "Fabrinet (FN), optical packaging and precision manufacturing",
-    },
-    "marvell": {
-        "intended_type": "public_equity",
-        "ticker": "MRVL",
-        "skip_yfinance": False,
-        "note": "Marvell Technology (MRVL), semiconductors",
-    },
-    "marvell technology": {
-        "intended_type": "public_equity",
-        "ticker": "MRVL",
-        "skip_yfinance": False,
-        "note": "Marvell Technology (MRVL), semiconductors",
-    },
-    "lumentum": {
-        "intended_type": "public_equity",
-        "ticker": "LITE",
-        "skip_yfinance": False,
-        "note": "Lumentum Holdings (LITE), photonics and fiber optics",
-    },
-    "coherent": {
-        "intended_type": "public_equity",
-        "ticker": "COHR",
-        "skip_yfinance": False,
-        "note": "Coherent Corp (COHR), photonics and laser technology",
-    },
-    "coherent corp": {
-        "intended_type": "public_equity",
-        "ticker": "COHR",
-        "skip_yfinance": False,
-        "note": "Coherent Corp (COHR), photonics and laser technology",
-    },
-    "samsung": {
-        "intended_type": "public_equity",
-        "ticker": "005930.KS",
-        "skip_yfinance": False,
-        "note": "Samsung Electronics (005930.KS), KRX listed",
-    },
-    "samsung electronics": {
-        "intended_type": "public_equity",
-        "ticker": "005930.KS",
-        "skip_yfinance": False,
-        "note": "Samsung Electronics (005930.KS), KRX listed",
-    },
-    "vertiv": {
-        "intended_type": "public_equity",
-        "ticker": "VRT",
-        "skip_yfinance": False,
-        "note": "Vertiv Holdings (VRT), data center infrastructure",
-    },
-    "micron": {
-        "intended_type": "public_equity",
-        "ticker": "MU",
-        "skip_yfinance": False,
-        "note": "Micron Technology (MU), memory and storage semiconductors",
-    },
-    "micron technology": {
-        "intended_type": "public_equity",
-        "ticker": "MU",
-        "skip_yfinance": False,
-        "note": "Micron Technology (MU), memory and storage semiconductors",
-    },
-    "nvidia": {
-        "intended_type": "public_equity",
-        "ticker": "NVDA",
-        "skip_yfinance": False,
-        "note": "NVIDIA Corporation (NVDA), GPUs and AI chips",
-    },
-    "microsoft": {
-        "intended_type": "public_equity",
-        "ticker": "MSFT",
-        "skip_yfinance": False,
-        "note": "Microsoft Corporation (MSFT), software and cloud",
-    },
-    "alphabet": {
-        "intended_type": "public_equity",
-        "ticker": "GOOGL",
-        "skip_yfinance": False,
-        "note": "Alphabet Inc (GOOGL), Google parent company",
-    },
-    "netflix": {
-        "intended_type": "public_equity",
-        "ticker": "NFLX",
-        "skip_yfinance": False,
-        "note": "Netflix Inc (NFLX), streaming entertainment",
-    },
-    "intel": {
-        "intended_type": "public_equity",
-        "ticker": "INTC",
-        "skip_yfinance": False,
-        "note": "Intel Corporation (INTC), semiconductors",
-    },
-    "qualcomm": {
-        "intended_type": "public_equity",
-        "ticker": "QCOM",
-        "skip_yfinance": False,
-        "note": "Qualcomm Inc (QCOM), wireless technology and semiconductors",
-    },
-    "sk hynix": {
-        "intended_type": "public_equity",
-        "ticker": "000660.KS",
-        "skip_yfinance": False,
-        "note": "SK Hynix (000660.KS), memory semiconductors, KRX listed",
-    },
-    # Known private companies — prevent meme/micro-cap token misclassification on CoinGecko
-    "anduril": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "Anduril Industries, defense tech startup (not the meme token on CoinGecko)",
-    },
-    "spacex": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "SpaceX, aerospace manufacturer, private company",
-    },
-    "stripe": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "Stripe, fintech payments, private company",
-    },
-    "openai": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "OpenAI, AI research company, private",
-    },
-    "databricks": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "Databricks, data analytics platform, private",
-    },
-    "epic games": {
-        "intended_type": "private_or_unlisted",
-        "skip_yfinance": True,
-        "note": "Epic Games, game developer (Fortnite), private",
-    },
-}
+
+def _load_disambiguation() -> dict:
+    """Load disambiguation table from data/disambiguation.json."""
+    path = os.path.join(_DATA_DIR, "disambiguation.json")
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"WARNING: Failed to load disambiguation.json: {e}", file=sys.stderr)
+        return {}
+
+
+def _load_defunct() -> set:
+    """Load defunct companies list from data/defunct.json."""
+    path = os.path.join(_DATA_DIR, "defunct.json")
+    try:
+        with open(path, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"WARNING: Failed to load defunct.json: {e}", file=sys.stderr)
+        return set()
+
+
+DEFUNCT_COMPANIES = _load_defunct()
+
+DISAMBIGUATION = _load_disambiguation()
 
 
 def load_env():
     load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
     # Also load from the current project directory (picks up FINNHUB_API_KEY etc.)
     load_dotenv(override=False)
-
-    if not os.environ.get("FIRECRAWL_API_KEY"):
-        print("WARNING: Optional env var FIRECRAWL_API_KEY not set", file=sys.stderr)
 
     llm_keys = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY")
     if not any(os.environ.get(k) for k in llm_keys):
@@ -362,10 +86,6 @@ def load_env():
             file=sys.stderr,
         )
         sys.exit(1)
-
-    for key in ("COINGECKO_API_KEY", "ROOTDATA_SKILL_KEY"):
-        if not os.environ.get(key):
-            print(f"WARNING: Optional env var {key} not set", file=sys.stderr)
 
 
 def refine_entity_type(company_name: str, company_type: str) -> str:
@@ -447,17 +167,25 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
     Returns (company_type, resolved_ticker, company_full_name).
     company_full_name is the human-readable name from yfinance (e.g. "Coherent Corp.").
     """
+    _route_start = time.time()
+    _yf_method = None
 
     # 0a. Defunct check — skip all API calls for known collapsed companies
     name_lower = company_name.lower().strip()
     if name_lower in DEFUNCT_COMPANIES:
         print(f"[detect] DEFUNCT: '{company_name}' is in known defunct companies list")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → defunct via defunct "
+            f"(ticker=None) [{time.time()-_route_start:.1f}s]")
         return "defunct", None, None
 
     # 0. Disambiguation table — known name conflicts, checked before any API call
     if name_lower in DISAMBIGUATION:
         d = DISAMBIGUATION[name_lower]
         print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} (ticker={d.get('ticker')}) ({d['note']})")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → {d['intended_type']} via disambiguation "
+            f"(ticker={d.get('ticker')}) [{time.time()-_route_start:.1f}s]")
         return d["intended_type"], d.get("ticker"), None
 
     # 1. Try yfinance first — direct ticker match
@@ -475,6 +203,7 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
         )
         if yf_mcap > 0:
             yf_ticker = company_name
+            _yf_method = "yfinance_direct"
         else:
             yf_fullname = None
     except (asyncio.TimeoutError, Exception) as e:
@@ -508,6 +237,7 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                         yf_mcap = _mcap
                         yf_ticker = resolved
                         yf_fullname = _name
+                        _yf_method = "yfinance_search"
         except (asyncio.TimeoutError, Exception) as e:
             import traceback
             print(f"yfinance name resolution failed: {e}", file=sys.stderr)
@@ -542,6 +272,7 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                             continue
                     yf_ticker = symbol
                     yf_fullname = description
+                    _yf_method = "finnhub"
                     print(f"[detect] FINNHUB_FALLBACK: '{company_name}' -> '{symbol}' ({description})")
                     break
         except (asyncio.TimeoutError, Exception) as e:
@@ -554,14 +285,21 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                 cg_coin_id, cg_mcap = await _coingecko_search_mcap(company_name, client)
                 if cg_mcap > 0 and yf_mcap > 0 and cg_mcap > yf_mcap * 10:
                     print(f"[detect] MCAP_OVERRIDE: CoinGecko ${cg_mcap:,.0f} >> yfinance ${yf_mcap:,.0f}, using crypto")
+                    log("detect", "ENTITY_ROUTE",
+                        f"'{company_name}' → crypto via coingecko_override "
+                        f"(ticker=None) [{time.time()-_route_start:.1f}s]")
                     return "crypto", None, None
         except Exception as e:
             print(f"[detect] CoinGecko mcap comparison failed: {e}", file=sys.stderr)
         print(f"Detected type: public_equity (yfinance ticker={yf_ticker} fullname={yf_fullname} marketCap={yf_mcap})")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → public_equity via {_yf_method or 'yfinance'} "
+            f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
         return "public_equity", yf_ticker, yf_fullname
 
     # 2. Try CoinGecko with strict name matching
     coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
+    _cg_matched_coin = None  # set when a valid crypto match is found
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
@@ -580,8 +318,8 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                     continue
                 mcap_rank = coin.get("market_cap_rank")
                 if mcap_rank is not None and mcap_rank > 0:
-                    print(f"Detected type: crypto (matched coin '{coin.get('name')}' rank={mcap_rank})")
-                    return "crypto", None, None
+                    _cg_matched_coin = coin.get("name")
+                    break
                 coin_id = coin.get("id", "")
                 try:
                     detail_resp = await client.get(
@@ -594,14 +332,55 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                     detail = detail_resp.json()
                     mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
                     if mcap and mcap > 10_000_000:  # $10M threshold — ignore meme/micro-cap tokens
-                        print(f"Detected type: crypto (matched coin '{coin.get('name')}' mcap=${mcap:,.0f})")
-                        return "crypto", None, None
+                        _cg_matched_coin = coin.get("name")
+                        break
                     elif mcap:
                         print(f"[detect] MEME_TOKEN_SKIP: '{coin.get('name')}' mcap=${mcap:,.0f} < $10M threshold — treating as not-crypto")
                 except Exception:
                     pass
     except Exception as e:
         print(f"CoinGecko detection failed: {e}", file=sys.stderr)
+
+    if _cg_matched_coin:
+        # Wikipedia guard: verify this is actually a crypto project, not a real company
+        # with a same-name meme token on CoinGecko.
+        _wiki_confirmed = True  # default: trust CoinGecko
+        try:
+            wiki_result = await asyncio.wait_for(
+                fetch_wikipedia(company_name), timeout=3.0
+            )
+            wiki_text = (wiki_result or {}).get("extract", "")
+            if len(wiki_text) > 100:
+                _crypto_kws = [
+                    "blockchain", "cryptocurrency", "token", "defi",
+                    "web3", "decentralized", "crypto", "mining pool",
+                    "consensus mechanism", "smart contract", "dapp",
+                    "decentralized finance", "liquidity pool",
+                ]
+                if not any(kw in wiki_text.lower() for kw in _crypto_kws):
+                    _wiki_confirmed = False
+                    log("detect", "WIKI_GUARD",
+                        f"'{company_name}' Wikipedia article has no crypto keywords "
+                        f"— overriding CoinGecko match '{_cg_matched_coin}'")
+                else:
+                    log("detect", "WIKI_GUARD",
+                        f"'{company_name}' Wikipedia has crypto keywords "
+                        f"— confirming CoinGecko match '{_cg_matched_coin}'")
+        except (asyncio.TimeoutError, Exception) as e:
+            log("detect", "WIKI_GUARD",
+                f"'{company_name}' Wikipedia check failed ({e}) — keeping CoinGecko match")
+
+        if not _wiki_confirmed:
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → private_or_unlisted via coingecko_wiki_blocked "
+                f"(ticker=None) [{time.time()-_route_start:.1f}s]")
+            return "private_or_unlisted", None, None
+
+        print(f"Detected type: crypto (CoinGecko matched '{_cg_matched_coin}')")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → crypto via coingecko "
+            f"(coin='{_cg_matched_coin}', ticker=None) [{time.time()-_route_start:.1f}s]")
+        return "crypto", None, None
 
     # 3. Try DeFiLlama — catches DeFi protocols not on CoinGecko
     try:
@@ -617,6 +396,9 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
                     print(f"[detect] DeFiLlama check for '{company_name}': found={found} (slug={slug}, tvl={tvl:,.0f})")
                     if found:
                         print(f"Detected type: crypto (DeFiLlama slug='{slug}', tvl={tvl:,.0f})")
+                        log("detect", "ENTITY_ROUTE",
+                            f"'{company_name}' → crypto via defillama "
+                            f"(ticker=None) [{time.time()-_route_start:.1f}s]")
                         return "crypto", None, None
                 else:
                     print(f"[detect] DeFiLlama check for '{company_name}': found=False (HTTP {tvl_resp.status_code})")
@@ -627,6 +409,9 @@ async def detect_company_type(company_name: str) -> tuple[str, str | None, str |
 
     # 4. Default — not public, not crypto: treat as private/unlisted startup
     print("Detected type: private_or_unlisted")
+    log("detect", "ENTITY_ROUTE",
+        f"'{company_name}' → private_or_unlisted via default_private "
+        f"(ticker=None) [{time.time()-_route_start:.1f}s]")
     return "private_or_unlisted", None, None
 
 
@@ -1280,6 +1065,124 @@ def prepare_structured_data(
         base["crypto_numbers"] = _extract_crypto_numbers(r1_data)
     elif entity_type in ("venture_capital", "private_or_unlisted", "foundation"):
         base["vc_numbers"] = _extract_vc_numbers(r1_data)
+
+    # ── v3 groupings (added alongside existing fields; v2 is unaffected) ────
+    import re as _re
+    company_meta = base["company_meta"]
+    price_data = base["price"]
+    financials_data = base["financials"]
+    earnings_data = base["earnings"]
+    technicals_data = base["technicals"]
+
+    # headquarters: from yfinance city/state/country
+    yf_info = (fetcher_results.get("yfinance") or {}).get("data") or {}
+    _hq_parts = [p for p in [yf_info.get("city", ""), yf_info.get("state", ""), yf_info.get("country", "")] if p]
+    headquarters = ", ".join(_hq_parts) if _hq_parts else None
+
+    # founded: extract year from Wikipedia text
+    founded = None
+    _wiki_raw = (fetcher_results.get("wikipedia") or {}).get("data") or {}
+    # Wikipedia fetcher returns a dict with "extract" key; fall back to string repr
+    wiki_text = _wiki_raw.get("extract", "") if isinstance(_wiki_raw, dict) else str(_wiki_raw)
+    if wiki_text:
+        _m = _re.search(r'(?:founded|established|incorporated)\s+(?:in\s+)?(\d{4})', wiki_text, _re.IGNORECASE)
+        if _m:
+            _year = int(_m.group(1))
+            if 1800 <= _year <= 2026:
+                founded = _year
+
+    # headquarters: Wikipedia fallback (only used if yfinance has nothing)
+    wiki_headquarters = None
+    if wiki_text:
+        _hq_m = _re.search(
+            r'(?:headquartered|based|headquarters)\s+in\s+([A-Z][a-zA-Z\s,]+?)(?:\.|,\s+(?:it|the|and|which))',
+            wiki_text,
+        )
+        if _hq_m:
+            wiki_headquarters = _hq_m.group(1).strip().rstrip(",")
+
+    # CEO: Wikipedia fallback (only used if yfinance CEO is null)
+    wiki_ceo = None
+    if wiki_text:
+        # Pattern 1: "CEO Dario Amodei" / "led by CEO Sam Altman" / "chief executive officer Jensen Huang"
+        _ceo_m = _re.search(
+            r'(?:CEO|chief executive officer|led by)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+            wiki_text,
+        )
+        if _ceo_m:
+            wiki_ceo = _ceo_m.group(1).strip()
+        else:
+            # Pattern 2: "Dario Amodei, who is/are ... CEO" (Wikipedia infobox-style prose)
+            _ceo_m2 = _re.search(
+                r'([A-Z][a-z]+\s+[A-Z][a-z]+),\s+who\s+(?:is|are)\s+(?:\w+\s+and\s+)?CEO\b',
+                wiki_text,
+            )
+            if _ceo_m2:
+                wiki_ceo = _ceo_m2.group(1).strip()
+
+    # revenue as formatted string
+    _rev_raw = financials_data.get("revenue_ttm")
+    revenue_str = _format_currency(_rev_raw) if _rev_raw else None
+
+    # next earnings for outlook
+    _next_earnings = earnings_data.get("next_earnings_date")
+    _next_earnings_iso = str(_next_earnings)[:10] if _next_earnings else None
+
+    # crypto dict for modules
+    _crypto_numbers = base.get("crypto_numbers") or {}
+    _crypto_module = None
+    if entity_type == "crypto":
+        _crypto_module = {
+            "token_price": _crypto_numbers.get("token_price"),
+            "price_change_24h": _crypto_numbers.get("price_change_24h"),
+            "price_change_30d": _crypto_numbers.get("price_change_30d"),
+            "market_cap": _crypto_numbers.get("market_cap"),
+            "volume_24h": _crypto_numbers.get("volume_24h"),
+            "tvl": _crypto_numbers.get("tvl"),
+            "mcap_tvl_ratio": _crypto_numbers.get("mcap_tvl_ratio"),
+            "category": _crypto_numbers.get("category"),
+            "chains_count": _crypto_numbers.get("chains_count"),
+        }
+
+    _hq_final = headquarters or wiki_headquarters
+    _ceo_final = company_meta.get("ceo") or wiki_ceo
+
+    base["_v3"] = {
+        "identity": {
+            "sector": company_meta.get("sector"),
+            "industry": company_meta.get("industry"),
+            "headquarters": _hq_final,
+            "founded": founded,
+        },
+        "scale": {
+            "employees": company_meta.get("team_size"),
+            "revenue": revenue_str,
+            "market_cap": price_data.get("market_cap"),
+        },
+        "people": {
+            "ceo": _ceo_final,
+        },
+        "modules": {
+            "financial": {
+                "price": price_data,
+                "valuation": base["valuation"],
+                "technicals": technicals_data,
+                "margins": {
+                    "gross_margin": financials_data.get("gross_margin"),
+                    "operating_margin": financials_data.get("operating_margin"),
+                    "revenue_growth_yoy": financials_data.get("revenue_growth"),
+                    "fcf_ttm": financials_data.get("fcf"),
+                },
+            } if entity_type == "public_equity" else None,
+            "crypto": _crypto_module,
+        },
+        "peers": base["peers"],
+        "outlook": {
+            "next_event": "Earnings" if _next_earnings_iso else None,
+            "next_event_date": _next_earnings_iso,
+        },
+    }
+
     return base
 
 
@@ -1577,61 +1480,6 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
             "compressed": compressed,
             "_timing": _timing,
         }
-    else:
-        # ── v1: four-stage LLM synthesis ───────────────────────────────────
-        _t = time.time()
-        try:
-            judgment = synthesize(company_name, entity_type, judgment_results, elapsed, api_calls)
-        except RuntimeError as e:
-            print(f"[research] LLM synthesis failed (no API keys?): {e}", file=sys.stderr)
-            judgment = {
-                "error": f"LLM synthesis failed: {e}",
-                "metadata": {
-                    "total_time_seconds": round(elapsed, 2),
-                    "total_api_calls": api_calls,
-                    "llm_model_used": "none",
-                    "llm_tokens_used": 0,
-                },
-            }
-        _timing["synthesize_total"] = round(time.time() - _t, 2)
-        _meta = (judgment.get("metadata") or {})
-        for _k in ("llm_extract", "llm_judge", "llm_act"):
-            _v = _meta.pop(f"_timing_{_k}", None)
-            if _v is not None:
-                _timing[_k] = _v
-
-        # LLM peer fallback: if no peer_comparison yet, use tickers from judgment
-        if not peer_comparison:
-            try:
-                _cl = (judgment.get("competitive_landscape") or {})
-                _llm_tickers = [
-                    t.strip().upper() for t in (_cl.get("peer_tickers") or [])[:3]
-                    if isinstance(t, str) and t.strip()
-                ]
-                if _llm_tickers:
-                    print(f"[peers] LLM-suggested tickers: {_llm_tickers}")
-                    peer_comparison = await asyncio.wait_for(
-                        fetch_peer_data(_llm_tickers), timeout=5.0
-                    )
-                    print(f"[peers] LLM batch got {len(peer_comparison)} records")
-            except Exception as _e:
-                print(f"[peers] LLM peer batch failed: {_e}")
-
-        _timing["total_wall"] = round(time.time() - t0, 2)
-        output = {
-            "company": company_name,
-            "company_type": company_type,
-            "entity_type": entity_type,
-            "sources_succeeded": succeeded,
-            "sources_failed": failed,
-            "api_calls": api_calls,
-            "elapsed_seconds": round(elapsed, 1),
-            "fetcher_results": fetcher_results,
-            "peer_comparison": peer_comparison,
-            "technical_snapshot": technical_snapshot,
-            "judgment": judgment,
-            "_timing": _timing,
-        }
 
     # Print to stdout
     output_json = json.dumps(output, indent=2, default=str)
@@ -1650,19 +1498,31 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
     # When eval.py runs this as a subprocess it captures stdout to parse JSON;
     # format_report output would appear after the JSON and cause "Extra data" errors.
     if output_file or sys.stdout.isatty():
-        from deeplook.formatter import format_dual_output_v2
-        formatter = format_dual_output_v2 if _pipeline_v2 else (format_layer1 if layer1 else format_report)
+        _schema_version = os.environ.get("DEEPLOOK_SCHEMA", "v3")
+        if _pipeline_v2 and _schema_version == "v3":
+            from deeplook.formatter import format_output_v3
+            formatter = format_output_v3
+        elif _pipeline_v2:
+            from deeplook.formatter import format_dual_output_v2
+            formatter = format_dual_output_v2
         if output_file:
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                formatter(output)
-            report_text = buf.getvalue()
+            # Formatters may return a string (v2/v3) or print to stdout (v1)
+            result = formatter(output)
+            if isinstance(result, str):
+                report_text = result
+            else:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    formatter(output)
+                report_text = buf.getvalue()
             sys.stdout.write(report_text)
             with open(output_file, "w") as f:
                 f.write(report_text)
             print(f"Report saved to {output_file}", file=sys.stderr)
         else:
-            formatter(output)
+            result = formatter(output)
+            if isinstance(result, str):
+                sys.stdout.write(result)
 
     return output
 

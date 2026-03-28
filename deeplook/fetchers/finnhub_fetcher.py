@@ -9,10 +9,12 @@ def _get_client():
     """Return a Finnhub client, or None if API key is not set."""
     api_key = os.getenv("FINNHUB_API_KEY")
     if not api_key:
-        logger.warning("FINNHUB_API_KEY not set — Finnhub fetcher disabled")
         return None
-    import finnhub
-    return finnhub.Client(api_key=api_key)
+    try:
+        import finnhub
+        return finnhub.Client(api_key=api_key)
+    except ImportError:
+        return None
 
 
 def fetch_finnhub(ticker: str) -> dict:

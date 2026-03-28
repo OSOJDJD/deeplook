@@ -11,7 +11,10 @@ from datetime import date, timedelta
 
 
 def _setup_edgar():
-    from edgar import Company, set_identity
+    try:
+        from edgar import Company, set_identity
+    except ImportError:
+        return None
     identity = os.environ.get("EDGAR_IDENTITY", "DeepLook Research deeplook@example.com")
     set_identity(identity)
     return Company
@@ -22,6 +25,8 @@ async def fetch_sec_edgar(ticker: str) -> dict:
 
     try:
         Company = await asyncio.wait_for(asyncio.to_thread(_setup_edgar), timeout=10)
+        if Company is None:
+            return {"source": "sec_edgar", "success": False, "skipped": "edgartools not installed"}
         company = await asyncio.wait_for(asyncio.to_thread(Company, ticker), timeout=10)
     except Exception as e:
         return {"source": "sec_edgar", "success": False, "error": str(e)}
