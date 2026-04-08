@@ -1186,7 +1186,37 @@ def prepare_structured_data(
     return base
 
 
-async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False) -> dict:
+def _deterministic_search_queries(company_name: str, entity_type: str, round1_data: dict) -> dict:
+    """Generate search queries without LLM. Uses company name + entity type + key Round 1 data."""
+    from datetime import date as _date
+    d = _date.today()
+    quarter = f"Q{(d.month - 1) // 3 + 1} {d.year}"
+
+    yf = (round1_data.get("yfinance") or {}).get("data") or {}
+    ceo = yf.get("ceo_name") or ""
+    ticker = yf.get("symbol") or ""
+
+    news_queries = [
+        f"{company_name} latest news {quarter}",
+        f"{company_name} earnings {quarter}",
+    ]
+    if ticker and ticker != company_name:
+        news_queries[0] = f"{ticker} {company_name} news {quarter}"
+
+    if ceo:
+        yt_q1 = f"{company_name} {ceo} {quarter}".strip()
+    else:
+        yt_q1 = f"{company_name} CEO interview {quarter}"
+
+    youtube_queries = [
+        yt_q1,
+        f"{company_name} earnings call {quarter}",
+    ]
+
+    return {"news_queries": news_queries, "youtube_queries": youtube_queries}
+
+
+async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False, use_llm: bool = False) -> dict:
     t0 = time.time()
     _timing: dict = {}
 
@@ -1255,13 +1285,17 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
         _timing[f"fetcher_{_n}"] = _r.pop("_timing_s", None)
     r1_data = {name: result for name, result in r1_results_list}
 
-    # ── Round 1.5: Haiku generates context-aware search queries ────────────
-    from deeplook.judgment.synthesize import generate_search_queries
+    # ── Round 1.5: Generate context-aware search queries ────────────────────
     _t = time.time()
-    search_queries_haiku = await asyncio.to_thread(
-        generate_search_queries, company_name, entity_type, r1_data
-    )
-    _timing["llm_search_queries"] = round(time.time() - _t, 2)
+    if use_llm:
+        from deeplook.judgment.synthesize import generate_search_queries
+        search_queries_haiku = await asyncio.to_thread(
+            generate_search_queries, company_name, entity_type, r1_data
+        )
+        _timing["llm_search_queries"] = round(time.time() - _t, 2)
+    else:
+        search_queries_haiku = _deterministic_search_queries(company_name, entity_type, r1_data)
+        _timing["llm_search_queries"] = 0
     print(f"[search_queries] youtube={search_queries_haiku.get('youtube_queries')}, "
           f"news={search_queries_haiku.get('news_queries')}")
 
@@ -1456,13 +1490,30 @@ async def run_research(company_name: str, include_youtube: bool = True, output_f
             print(f"[v2] peer RSI: {[(p.get('ticker'), p.get('rsi_14')) for p in peer_comparison]}")
 
     if _pipeline_v2:
-        # ── v2: Code Processing Layer + Haiku Compress ────────────────────
-        from deeplook.judgment.synthesize import compress_context
+        # ── v2: Code Processing Layer (+ optional LLM Compress) ───────────
         _t = time.time()
         structured_data = prepare_structured_data(
             company_name, entity_type, r1_data, fetcher_results, peer_comparison, technical_snapshot
         )
-        compressed = await compress_context(structured_data)
+        if use_llm:
+            from deeplook.judgment.synthesize import compress_context
+            compressed = await compress_context(structured_data)
+        else:
+            # Deterministic mode: skip LLM compress entirely
+            compressed = {
+                "events": [],
+                "context": [],
+                "catalysts": [],
+                "description": None,
+                "founders": [],
+                "valuation_extract": None,
+                "verdict": {},
+                "recent_news": [],
+                "forward_looking": [],
+                "entity_context": [],
+                "_model": "deterministic",
+                "_tokens": 0,
+            }
         _timing["compress_context"] = round(time.time() - _t, 2)
 
         _timing["total_wall"] = round(time.time() - t0, 2)
