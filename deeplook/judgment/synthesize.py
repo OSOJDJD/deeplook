@@ -51,9 +51,6 @@ def _llm_timeout() -> float:
 
 
 def _model_for(role: str, provider: str) -> str:
-    env_val = os.environ.get(f"DEEPLOOK_{role.upper()}_MODEL")
-    if env_val:
-        return env_val
     mapping = {
         "anthropic": _ANTHROPIC_DEFAULTS,
         "openai":    _OPENAI_DEFAULTS,
@@ -79,94 +76,123 @@ def _clean_json_text(raw: str) -> tuple[str, str]:
 
 # ── LLM caller ────────────────────────────────────────────────────────────────
 
+def _call_provider(
+    provider: str,
+    prompt: str,
+    system_prompt: str | None,
+    model_role: str,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[str, str, int]:
+    """Call a single LLM provider. Returns (response_text, model_name, tokens_used).
+    Raises on failure so the caller can try the next provider.
+    """
+    model = _model_for(model_role, provider)
+
+    if provider == "anthropic":
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        kwargs = dict(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=_llm_timeout(),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        response = client.messages.create(**kwargs)
+        tokens = response.usage.input_tokens + response.usage.output_tokens
+        return response.content[0].text, model, tokens
+
+    if provider == "openai":
+        import openai as _openai
+        client = _openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=_llm_timeout())
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        response = client.chat.completions.create(
+            model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
+        )
+        tokens = response.usage.total_tokens if response.usage else 0
+        return response.choices[0].message.content, model, tokens
+
+    if provider == "gemini":
+        from google import genai
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        response = client.models.generate_content(model=model, contents=full_prompt)
+        return response.text, model, 0
+
+    if provider == "deepseek":
+        import openai as _openai
+        client = _openai.OpenAI(
+            api_key=os.environ["DEEPSEEK_API_KEY"],
+            base_url="https://api.deepseek.com",
+            timeout=_llm_timeout(),
+        )
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        response = client.chat.completions.create(
+            model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
+        )
+        tokens = response.usage.total_tokens if response.usage else 0
+        return response.choices[0].message.content, model, tokens
+
+    raise ValueError(f"Unknown provider: {provider}")
+
+
 def get_llm_response(
     prompt: str, system_prompt: str = None, model_role: str = "extract",
     temperature: float = 0, max_tokens: int = 4096,
 ) -> tuple[str, str, int]:
     """Call LLM with model selected by role. Timeout: 60s per call.
     Returns (response_text, model_name, tokens_used).
-    Priority: Anthropic → OpenAI → Gemini → DeepSeek.
+
+    Provider selection: DEEPLOOK_LLM_PROVIDER env var (default: auto).
+    - auto: tries all providers that have keys configured
+    - anthropic / openai / gemini / deepseek: uses only that provider
     """
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        try:
-            import anthropic as _anthropic
-            model = _model_for(model_role, "anthropic")
-            client = _anthropic.Anthropic(api_key=anthropic_key)
-            kwargs = dict(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=_llm_timeout(),
-                messages=[{"role": "user", "content": prompt}],
-            )
-            if system_prompt:
-                kwargs["system"] = system_prompt
-            response = client.messages.create(**kwargs)
-            tokens = response.usage.input_tokens + response.usage.output_tokens
-            return response.content[0].text, model, tokens
-        except ImportError:
-            pass
-        except Exception as e:
-            log("get_llm_response", "ANTHROPIC_ERROR", str(e))
+    _provider_env = os.environ.get("DEEPLOOK_LLM_PROVIDER", "auto").lower().strip()
 
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    if openai_key:
-        try:
-            import openai as _openai
-            model = _model_for(model_role, "openai")
-            client = _openai.OpenAI(api_key=openai_key, timeout=_llm_timeout())
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            response = client.chat.completions.create(
-                model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
-            )
-            tokens = response.usage.total_tokens if response.usage else 0
-            return response.choices[0].message.content, model, tokens
-        except ImportError:
-            pass
-        except Exception as e:
-            log("get_llm_response", "OPENAI_ERROR", str(e))
+    _provider_keys = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai":    "OPENAI_API_KEY",
+        "gemini":    "GEMINI_API_KEY",
+        "deepseek":  "DEEPSEEK_API_KEY",
+    }
 
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if gemini_key:
+    if _provider_env != "auto":
+        # Single-provider mode
+        _key_env = _provider_keys.get(_provider_env)
+        if not _key_env:
+            raise RuntimeError(f"Unknown DEEPLOOK_LLM_PROVIDER value: {_provider_env!r}")
+        if not os.environ.get(_key_env):
+            raise RuntimeError(
+                f"DEEPLOOK_LLM_PROVIDER={_provider_env!r} but {_key_env} is not set."
+            )
         try:
-            from google import genai
-            model = _model_for(model_role, "gemini")
-            client = genai.Client(api_key=gemini_key)
-            full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-            response = client.models.generate_content(model=model, contents=full_prompt)
-            return response.text, model, 0
+            return _call_provider(_provider_env, prompt, system_prompt, model_role, temperature, max_tokens)
         except ImportError:
-            pass
+            raise RuntimeError(f"Provider {_provider_env!r}: required library not installed.")
         except Exception as e:
-            log("get_llm_response", "GEMINI_ERROR", str(e))
+            log("get_llm_response", f"{_provider_env.upper()}_ERROR", str(e))
+            raise
 
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
-    if deepseek_key:
+    # Auto mode: iterate through all providers that have keys
+    for provider, key_env in _provider_keys.items():
+        if not os.environ.get(key_env):
+            continue
         try:
-            import openai as _openai
-            model = _model_for(model_role, "deepseek")
-            client = _openai.OpenAI(
-                api_key=deepseek_key,
-                base_url="https://api.deepseek.com",
-                timeout=_llm_timeout(),
-            )
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
-            response = client.chat.completions.create(
-                model=model, max_tokens=max_tokens, temperature=temperature, messages=messages
-            )
-            tokens = response.usage.total_tokens if response.usage else 0
-            return response.choices[0].message.content, model, tokens
+            return _call_provider(provider, prompt, system_prompt, model_role, temperature, max_tokens)
         except ImportError:
-            pass
+            continue
         except Exception as e:
-            log("get_llm_response", "DEEPSEEK_ERROR", str(e))
+            log("get_llm_response", f"{provider.upper()}_ERROR", str(e))
+            continue
 
     raise RuntimeError(
         "No LLM API key available. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, "
@@ -483,18 +509,13 @@ async def compress_context(structured_data: dict) -> dict:
     Input: output of prepare_structured_data()
     Output: {events, context, catalysts, description, founders, valuation_extract, verdict, _model, _tokens}
 
-    Model selection: DEEPLOOK_MODEL env var overrides all roles. If unset, uses Haiku (extract role).
+    Model selection: uses Haiku (extract role) via provider fallback chain.
     """
     import asyncio as _asyncio
 
     company_name = structured_data.get("company_name", "")
     entity_type = structured_data.get("entity_type", "")
     compress_system = _build_compress_prompt(entity_type)
-
-    # DEEPLOOK_MODEL override: if set, use that model for all calls
-    _override_model = os.environ.get("DEEPLOOK_MODEL")
-    if _override_model:
-        os.environ["DEEPLOOK_EXTRACT_MODEL"] = _override_model
 
     # Build text context: news + website/wiki snippets + entity-specific numbers
     extra_context = ""

@@ -67,6 +67,15 @@ def format_lookup_markdown(data: dict) -> str:
         vd = cm.get("verdict") or {}
         price_info = sd.get("price") or {}
         company_meta = sd.get("company_meta") or {}
+        et = data.get("entity_type", "") or sd.get("entity_type", "")
+
+        # Deterministic verdict fallback when LLM compress was skipped
+        if not vd:
+            try:
+                from deeplook.verdict_generator import generate_verdict
+                vd = generate_verdict(sd, et)
+            except Exception:
+                vd = {}
 
         company = data.get("company", "Unknown")
         ticker = data.get("ticker") or ""
@@ -77,8 +86,9 @@ def format_lookup_markdown(data: dict) -> str:
         industry = company_meta.get("industry") or sector
 
         one_line = vd.get("one_line") or ""
-        bull = vd.get("bull_case") or ""
-        bear = vd.get("bear_case") or ""
+        # Support both old keys (bull_case/bear_case) and new keys (tailwind/headwind)
+        bull = vd.get("bull_case") or vd.get("tailwind") or ""
+        bear = vd.get("bear_case") or vd.get("headwind") or ""
         wait_for = vd.get("wait_for") or ""
         confidence = vd.get("confidence") or ""
     else:
@@ -130,6 +140,30 @@ def format_lookup_markdown(data: dict) -> str:
         lines.append(f"⏳ Wait: {wait_for}")
     if footer:
         lines.append(footer)
+
+    # Analysis Guide — max 3 instructions
+    _et_lookup = ""
+    _sd_lookup = {}
+    if is_v2:
+        _sd_lookup = data.get("structured_data") or {}
+        _et_lookup = data.get("entity_type", "") or _sd_lookup.get("entity_type", "")
+    if _et_lookup and _sd_lookup:
+        try:
+            from deeplook.instruction_generator import generate_analysis_guide
+            guide = generate_analysis_guide(_sd_lookup, _et_lookup)
+            if guide:
+                # Trim to max 3 instructions
+                guide_lines = guide.split("\n")
+                trimmed = [guide_lines[0]] + guide_lines[1:4]
+                lines.append("")
+                lines.extend(trimmed)
+        except Exception:
+            pass
+
+    # Display Hint
+    if _et_lookup:
+        lines.append("")
+        lines.append(_build_display_hint(_et_lookup))
 
     return "\n".join(lines)
 
@@ -422,8 +456,13 @@ def format_summary_markdown(data):
         L.append("**Key Signals:**")
         for s in ss:
             sn = (s.get("sentiment") or "").lower()
-            ic = "\U0001F7E2" if sn=="positive" else ("\U0001F534" if sn=="negative" else "\U0001F7E1")
-            L.append("- " + ic + " " + (s.get("date","")) + " \u2014 " + (s.get("summary","")))
+            if sn == "positive":
+                ic = "\U0001F7E2 "
+            elif sn == "negative":
+                ic = "\U0001F534 "
+            else:
+                ic = ""
+            L.append("- " + ic + (s.get("date","")) + " \u2014 " + (s.get("summary","")))
         L.append("")
     ol = vd.get("one_line",""); bu = vd.get("bull_case",""); be = vd.get("bear_case",""); wa = vd.get("wait_for","")
     entry = vd.get("entry_trigger",""); risk_t = vd.get("risk_trigger",""); peer_ctx = vd.get("peer_context","")
@@ -1046,6 +1085,71 @@ def main():
         sys.stdout.write(result)
 
 
+def _build_display_hint(entity_type: str) -> str:
+    """Return HTML comment block with presentation guidance for the host LLM."""
+    base = """<!-- DISPLAY_HINT:
+Render this data as a structured dashboard. Sections to include:
+
+1. HEADER: Company name + identifier (ticker or type badge), key scale metric (market cap or valuation or raised).
+   Sub-line: CEO, sector, founded year.
+
+2. VERDICT BOX: One-line verdict in bold. Momentum badge (accelerating=green, steady=blue, decelerating=red, uncertain=grey).
+   Tailwind (green left border). Headwind (red left border). Watch for (amber left border).
+
+3. RECENT EVENTS: Up to 5 events with date and summary. Color-coded dots (positive=green, negative=red, neutral=grey).
+
+4. ANALYSIS GUIDE: If present, render as a numbered list with subtle background. Label: "How to interpret this data".
+
+5. DATA TABLE: Key numbers relevant to entity type (see entity-specific notes below).
+
+6. PEERS: If peer table present, show comparison table with subject company row highlighted.
+
+7. COMING UP: Upcoming catalysts and earnings dates.
+
+8. FOOTER: Sources count, generation time."""
+
+    entity_specific = {
+        "public_equity": """
+
+Entity-specific (public_equity):
+- DATA TABLE columns: Price, 1D/30D change, 52W range, RSI-14, MA50 signal, MA200 signal, P/E, P/S, PEG, gross margin, operating margin, revenue growth.
+- Highlight RSI < 30 in green (oversold), RSI > 70 in red (overbought).
+- MA200 signal: above=green, below=red.
+- Show analyst target price with implied upside/downside if available.""",
+
+        "crypto": """
+
+Entity-specific (crypto):
+- DATA TABLE columns: Token price, 24h/30d change, market cap, TVL, MCap/TVL ratio, 24h volume.
+- MCap/TVL < 1.0 = green highlight. MCap/TVL > 5.0 = amber warning.
+- Show 30-day price trend prominently.""",
+
+        "private_or_unlisted": """
+
+Entity-specific (private):
+- DATA TABLE columns: Total raised, last round details, key investors, founded year.
+- Skip price, PE, and technical sections — no public market data.
+- Focus on funding trajectory and team.""",
+
+        "venture_capital": """
+
+Entity-specific (venture capital):
+- DATA TABLE columns: AUM, total investments, last fund, stage focus, notable portfolio.
+- Skip financial and technical sections.
+- Focus on portfolio and investment thesis.""",
+
+        "defunct": """
+
+Entity-specific (defunct):
+- Show DEFUNCT badge prominently in header (red background).
+- DATA TABLE columns: Peak valuation, shutdown date, creditor recovery %.
+- Focus recovery proceedings in the events section.""",
+    }
+
+    addition = entity_specific.get(entity_type, "")
+    return base + addition + "\n\nStyle: Clean, professional. Skip any section where data is null or empty.\n-->"
+
+
 def build_structured_json_v3(data: dict) -> dict:
     """Assemble clean v3 JSON schema from v3 pipeline output."""
     import json as _json
@@ -1056,6 +1160,49 @@ def build_structured_json_v3(data: dict) -> dict:
     cm = data.get("compressed") or {}
     et = data.get("entity_type", "") or sd.get("entity_type", "")
 
+    # ── Fallbacks when LLM compress was skipped (use_llm=False) ─────────────
+
+    # Verdict: deterministic if LLM didn't run
+    _verdict = cm.get("verdict") or {}
+    if not _verdict:
+        try:
+            from deeplook.verdict_generator import generate_verdict
+            _verdict = generate_verdict(sd, et)
+        except Exception:
+            pass
+
+    # Events: build from raw news when LLM compress was skipped
+    _events = cm.get("events") or []
+    if not _events:
+        for n in (sd.get("news_for_compression") or [])[:5]:
+            _events.append({
+                "date": (n.get("date") or "")[:10],
+                "summary": n.get("title") or n.get("snippet") or "",
+                "sentiment": n.get("sentiment") or None,
+            })
+
+    # Description: Wikipedia fallback
+    _description = cm.get("description")
+    if not _description:
+        ttc = sd.get("text_for_compression") or {}
+        wiki_raw = ttc.get("wikipedia")
+        if isinstance(wiki_raw, str):
+            if wiki_raw.strip().startswith("{'source'") or wiki_raw.strip().startswith('{"source"'):
+                import ast
+                try:
+                    wiki_dict = ast.literal_eval(wiki_raw)
+                    wiki_text = wiki_dict.get("extract") or ""
+                except (ValueError, SyntaxError):
+                    wiki_text = ""
+            else:
+                wiki_text = wiki_raw
+        elif isinstance(wiki_raw, dict):
+            wiki_text = wiki_raw.get("extract") or ""
+        else:
+            wiki_text = ""
+        if wiki_text and len(wiki_text.strip()) > 20:
+            _description = wiki_text[:300].rstrip() + ("…" if len(wiki_text) > 300 else "")
+
     result = {
         "version": "3.0",
 
@@ -1064,7 +1211,7 @@ def build_structured_json_v3(data: dict) -> dict:
             "name": data.get("company", ""),
             "entity_type": et,
             "sector": (v3.get("identity") or {}).get("sector"),
-            "description": cm.get("description"),
+            "description": _description,
             "founded": (v3.get("identity") or {}).get("founded"),
             "headquarters": (v3.get("identity") or {}).get("headquarters"),
         },
@@ -1089,7 +1236,7 @@ def build_structured_json_v3(data: dict) -> dict:
 
         # 4. SIGNALS
         "signals": {
-            "events": cm.get("events") or [],
+            "events": _events,
             "context": cm.get("context") or [],
         },
 
@@ -1104,7 +1251,7 @@ def build_structured_json_v3(data: dict) -> dict:
         },
 
         # 7. VERDICT
-        "verdict": cm.get("verdict") or {},
+        "verdict": _verdict,
 
         # 8. META
         "meta": {
@@ -1414,14 +1561,33 @@ def format_output_v3(data: dict) -> str:
             lines.append(" | ".join(crypto_parts))
         lines.append("")
 
+    # === ANALYSIS GUIDE ===
+    sd_raw = data.get("structured_data") or {}
+    et_raw = data.get("entity_type", "") or sd_raw.get("entity_type", "")
+    try:
+        from deeplook.instruction_generator import generate_analysis_guide
+        guide = generate_analysis_guide(sd_raw, et_raw)
+        if guide:
+            lines.append("")
+            lines.append(guide)
+    except Exception:
+        pass
+
     # === FOOTER ===
+    lines.append("")
     lines.append(f"*{meta['sources_ok']} sources · {meta['generation_time_sec']}s · DeepLook v3.0*")
 
     # === EMBEDDED JSON ===
     markdown = "\n".join(lines)
     json_str = _json.dumps(sj, indent=2, ensure_ascii=False, default=str)
 
-    return markdown + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n"
+    display_hint = _build_display_hint(et_raw)
+
+    return (
+        markdown
+        + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n"
+        + "\n" + display_hint + "\n"
+    )
 
 
 if __name__ == "__main__":

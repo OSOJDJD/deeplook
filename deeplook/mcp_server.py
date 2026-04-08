@@ -375,7 +375,7 @@ async def deeplook_research(company_name: str) -> str:
         return rate_err
 
     t0 = time.monotonic()
-    data = await run_research(company_name)
+    data = await run_research(company_name, use_llm=False)
     duration = round(time.monotonic() - t0, 1)
 
     _request_logger.info(
@@ -411,7 +411,7 @@ async def deeplook_lookup(company_name: str) -> str:
         return rate_err
 
     t0 = time.monotonic()
-    data = await run_research(company_name, include_youtube=False)
+    data = await run_research(company_name, include_youtube=False, use_llm=False)
     duration = round(time.monotonic() - t0, 1)
 
     _request_logger.info(
@@ -421,6 +421,56 @@ async def deeplook_lookup(company_name: str) -> str:
     )
 
     return format_lookup_markdown(data)
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Full research with LLM judgment", readOnlyHint=True, destructiveHint=False))
+async def deeplook_research_with_judgment(company_name: str) -> str:
+    """
+    Deep company research with LLM-generated analysis (compress + verdict).
+    Requires an LLM API key configured on the server: ANTHROPIC_API_KEY,
+    OPENAI_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY.
+
+    Use DEEPLOOK_LLM_PROVIDER env var to select provider: auto (default),
+    anthropic, openai, gemini, deepseek.
+
+    Returns Markdown + structured JSON between <!-- STRUCTURED_DATA_START -->
+    and <!-- STRUCTURED_DATA_END --> tags.
+    """
+    _has_key = any(
+        os.environ.get(k)
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY")
+    )
+    if not _has_key:
+        return (
+            "**Error:** No LLM API key configured on this server. "
+            "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or DEEPSEEK_API_KEY "
+            "to use this tool. Use `deeplook_research` for the free data-only version."
+        )
+
+    ip = client_ip_var.get()
+    rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="research")
+    if not rate_ok:
+        _request_logger.info(
+            "%s | deeplook_research_with_judgment | %s | — | BLOCKED | %s",
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            company_name, rate_err,
+        )
+        return rate_err
+
+    t0 = time.monotonic()
+    data = await run_research(company_name, use_llm=True)
+    duration = round(time.monotonic() - t0, 1)
+
+    _request_logger.info(
+        "%s | deeplook_research_with_judgment | %s | %ss",
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        company_name, duration,
+    )
+
+    _schema = os.environ.get("DEEPLOOK_SCHEMA", "v3")
+    if _schema == "v3":
+        return format_output_v3(data)
+    return format_dual_output_v2(data)
 
 
 def main():
