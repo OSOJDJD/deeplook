@@ -1,135 +1,94 @@
 # DeepLook
 
-Open-source MCP server for company research. 10 sources, structured output, under 15 seconds.
+LLMs hallucinate financial data. DeepLook gives them real numbers instead.
 
-LLMs hallucinate financial data. DeepLook gives them real data instead — prices, financials, peers, news, technicals — from APIs, not from training data.
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![GitHub stars](https://img.shields.io/github/stars/OSOJDJD/deeplook?style=social)](https://github.com/OSOJDJD/deeplook)
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
-[![MIT License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![MCP Compatible](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+## What happens when you ask "Research NVIDIA"
+
+![DeepLook Dashboard](docs/screenshot-dashboard.png)
+
+![DeepLook Analysis](docs/screenshot-analysis.png)
+
+DeepLook provides structured context — real-time data from 8 APIs combined with analytical instructions that makes better output. The result:
+
+- **Accurate, up-to-date information** — not hallucinated numbers
+- **Clear at a glance** — financials, peers, technicals, news in one view
+- **Better AI output** — because good context drives good analysis
+
+Works for financial research, business due diligence, or any use case where you need to understand a company fast.
 
 ---
 
-## Quick start
+## Get started
 
-**Hosted (30 seconds):**
+### Claude.ai
 
-```
-Claude.ai → Settings → Connectors → Add MCP Server
-URL: https://mcp.deeplook.dev/mcp
-```
+1. Go to **Settings → Connectors → Add MCP**
+2. Paste: `https://mcp.deeplook.dev/mcp`
+3. Start a new chat and ask: *"Research NVIDIA"*
 
-Then: *"Use DeepLook to research NVIDIA"*
-
-Works with Claude, Cursor, Windsurf, or any MCP client.
-
-**Self-host:**
-
-```bash
-git clone https://github.com/OSOJDJD/deeplook.git
-cd deeplook
-python3 -m venv venv && source venv/bin/activate
-pip install -e .
-cp .env.example .env   # add at least one LLM key
-python -m deeplook.mcp_server --http --port 8819
-```
-
-Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+### Other MCP clients (Cursor, VS Code, Windsurf, Claude Desktop)
 
 ```json
 {
   "mcpServers": {
     "deeplook": {
-      "command": "/full/path/to/deeplook/venv/bin/python",
-      "args": ["-m", "deeplook.mcp_server"],
-      "cwd": "/full/path/to/deeplook",
-      "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
+      "url": "https://mcp.deeplook.dev/mcp"
     }
   }
 }
 ```
 
-> Replace `ANTHROPIC_API_KEY` with your preferred provider key: `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `DEEPSEEK_API_KEY`.
-
-CLI (no MCP):
+### Claude Code
 
 ```bash
-python -m deeplook "NVIDIA"
-python -m deeplook "Solana"
-python -m deeplook "Anthropic"
+claude mcp add --transport http deeplook https://mcp.deeplook.dev/mcp
+```
+
+### Self-host
+
+```bash
+git clone https://github.com/OSOJDJD/deeplook.git
+cd deeplook
+pip install -r requirements.txt
+python -m deeplook.mcp_server
 ```
 
 ---
 
-## Example output
+## What it covers
 
-![DeepLook NVIDIA Report](docs/nvidia-report.png)
-
----
-
-## Tools
-
-| Tool | What it does | Speed |
-|---|---|---|
-| `deeplook_research` | Full report — financials, peers, news, technicals, catalysts | ~15s |
-| `deeplook_lookup` | Quick snapshot — price, key metrics, headline | ~3s |
-
-## Supported entities
-
-Works for public equities, crypto tokens, DeFi protocols, private companies, VC firms, exchanges, and foundations.
+| Type | Examples |
+|------|----------|
+| Public stocks | NVIDIA, Apple, Tesla, TSMC |
+| Crypto | Bitcoin, Solana, Ethereum |
+| Private companies | Anthropic, Stripe, OpenAI |
+| VC firms | a16z, Sequoia |
+| Defunct | FTX, WeWork |
 
 ---
 
-## How it works
+## Extend DeepLook
 
-```
-Company name
-    ↓
-Entity router → stock / crypto / private / VC / exchange / foundation / defunct
-    ↓
-10 parallel fetchers → yfinance, news, CoinGecko, SEC EDGAR, Wikipedia, ...
-    ↓
-Code layer extracts all numbers from APIs (not LLM-generated)
-    ↓
-LLM compress + judge → verdict, signals, catalysts
-    ↓
-Structured report (markdown + embedded JSON)
-```
+DeepLook covers the basics. If you need data it doesn't have yet — a new market, a new data source, a new analysis rule — you can add it. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-## Data sources
+## Roadmap
 
-yfinance · DuckDuckGo News · Wikipedia · YouTube · CoinGecko · RootData · DeFiLlama · SEC EDGAR · Finnhub · Company websites
-
-## API keys
-
-At least one LLM provider required for self-host:
-
-`ANTHROPIC_API_KEY` · `OPENAI_API_KEY` · `GEMINI_API_KEY` · `DEEPSEEK_API_KEY`
-
-Optional: `TAVILY_API_KEY` · `COINGECKO_API_KEY` · `ROOTDATA_SKILL_KEY`
-
-See `.env.example` for details.
-
-## Eval
-
-58 companies tested (mega-cap, growth, crypto, pre-IPO, international):
-
-Overall 3.78/5.0 · Risk detection 4.36/5.0 · Signal quality 3.94/5.0
-
-Framework in `/eval`. Run it yourself, contribute ground truth.
+- [ ] More query tools — news, peers, financials, calendar as standalone lookups
+- [ ] Broader client support — Cursor, ChatGPT, VS Code, Windsurf, Claude Code
+- [ ] Deeper context — more analytical conditions, entity-specific instructions
+- [ ] Community contributions — new data sources, custom analysis rules
 
 ---
-
-## Contributing
-
-Found a bug? Report looks wrong? Have an idea? We'd love your help. See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 ## License
 
-MIT
+[AGPL-3.0](LICENSE)
 
 ---
 
-Built by [OSOJDJD](https://github.com/OSOJDJD)
+Built by [@OSOJDJD](https://github.com/OSOJDJD)
