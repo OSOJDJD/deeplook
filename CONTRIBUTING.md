@@ -4,12 +4,11 @@ Thanks for your interest in DeepLook! Whether it's a bug fix, a new data source,
 
 ## Design principles
 
-These guide every decision we make:
-
 - **Data over opinions** — Numbers come from APIs, not LLMs. Code extraction > LLM generation.
-- **Fast** — Reports under 15 seconds. Don't add blocking calls or unnecessary LLM roundtrips.
-- **Structured** — Output is markdown + embedded JSON. AI clients should be able to parse it programmatically.
-- **Entity-aware** — Different entity types (public_equity, crypto, private_or_unlisted, VC, exchange, foundation, defunct) need different data. Don't force one template on everything.
+- **Fast** — Don't slow down report generation. Avoid blocking calls and unnecessary roundtrips.
+- **Structured** — Output should be parseable by both humans and AI clients.
+- **Entity-aware** — A stock, a crypto token, and a VC firm need different data. Handle each properly.
+- **Good context → good output** — DeepLook provides data + analytical instructions. Better context in, better analysis out.
 
 ## Ways to contribute
 
@@ -19,19 +18,27 @@ These guide every decision we make:
 - Suggest new data sources or entity types
 
 **Code contributions:**
-- Fix a bug or improve accuracy
-- Add a new fetcher (data source)
-- Add support for a new entity type
-- Improve report formatting
+- Fix a bug or improve data accuracy
+- Add a new data source — market data, news, filings, transcripts, anything that helps understand a company
+- Add analysis rules to help AI interpret data better
+- Improve output formatting
 
-## Issues
+## How DeepLook is structured
 
-**We recommend opening an issue before writing code** — it helps us align on approach and saves you time.
+```
+deeplook/
+├── fetchers/                    # Each data source = one file (see wikipedia.py as template)
+├── instruction_generator.py     # Analysis rules for the AI
+├── verdict_generator.py         # Deterministic verdict from data
+├── formatter.py                 # Output formatting
+└── research.py                  # Pipeline orchestration
+```
 
-Good issues include:
-- Company name + what's wrong in the report
-- Steps to reproduce
-- Expected vs actual output
+**Want to add a data source?** Write a fetcher in `deeplook/fetchers/`, follow the pattern in `wikipedia.py` (simplest example), register it in `search_strategy.py`.
+
+**Want to add an analysis rule?** Add a condition to `deeplook/instruction_generator.py`. Each rule is an if/else that checks a data condition and generates an instruction for the AI.
+
+**Want to change the output?** Edit `deeplook/formatter.py`.
 
 ## Pull requests
 
@@ -42,7 +49,6 @@ git clone https://github.com/OSOJDJD/deeplook.git
 cd deeplook
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
-cp .env.example .env
 ```
 
 ### Before submitting
@@ -54,42 +60,23 @@ cp .env.example .env
 ### What we look for
 
 - Does it make reports more accurate or faster?
-- Does it follow existing patterns? (check `deeplook/fetchers/`, `deeplook/judgment/synthesize.py`, `deeplook/formatter.py`)
+- Does it follow existing patterns?
 - Is the code straightforward? No unnecessary abstractions.
 
 ### What doesn't fit
 
-- Raw LLM opinions injected as if they were data — DeepLook's numbers come from APIs, analysis hooks come from compressed news context
+- Raw LLM opinions injected as if they were data — DeepLook's numbers come from APIs, analysis instructions come from instruction_generator.py
 - Dependencies that add significant install weight for marginal value
 - Changes that slow report generation without clear accuracy gains
-
-Not sure if your idea fits? Open an issue first — happy to discuss.
 
 ## Code style
 
 - Python 3.10+
 - Type hints on public functions
-- `async` for all fetcher I/O (exception: `finnhub_fetcher.py` is sync)
-- Error handling with timeouts (10–30 seconds per external call, see `search_strategy.py`)
+- `async` for all fetcher I/O
+- Error handling with timeouts (10–30 seconds per external call)
 - Clear variable names — `revenue_growth` not `rg`
-
-## Adding a new data source
-
-1. Create a fetcher in `deeplook/fetchers/`
-2. Follow the existing pattern: async function, returns structured dict, handles errors gracefully
-3. Register in the parallel fetcher pipeline
-4. Add to the entity router if it's entity-type specific
-5. Test with 5+ companies across different entity types
-
-Not sure where to start? Look at `deeplook/fetchers/wikipedia.py` — it's one of the simplest fetchers and a good template.
-
-## Adding support for a new entity type
-
-1. Update entity router in `deeplook/fetchers/search_strategy.py` (`get_active_fetchers` + `build_search_queries`)
-2. Define which fetchers apply to this entity type
-3. Update LLM compress prompt for entity-specific filtering
-4. Add at least 3 test cases to `/eval`
 
 ## Questions?
 
-[Open an issue](https://github.com/OSOJDJD/deeplook/issues) — we're happy to help.
+Not sure if your idea fits? [Open an issue](https://github.com/OSOJDJD/deeplook/issues) — happy to discuss.
