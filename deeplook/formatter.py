@@ -1087,67 +1087,57 @@ def main():
 
 def _build_display_hint(entity_type: str) -> str:
     """Return HTML comment block with presentation guidance for the host LLM."""
-    base = """<!-- DISPLAY_HINT:
-Render this data as a structured dashboard. Sections to include:
-
-1. HEADER: Company name + identifier (ticker or type badge), key scale metric (market cap or valuation or raised).
-   Sub-line: CEO, sector, founded year.
-
-2. VERDICT BOX: One-line verdict in bold. Momentum badge (accelerating=green, steady=blue, decelerating=red, uncertain=grey).
-   Tailwind (green left border). Headwind (red left border). Watch for (amber left border).
-
-3. RECENT EVENTS: Up to 5 events with date and summary. Color-coded dots (positive=green, negative=red, neutral=grey).
-
-4. ANALYSIS GUIDE: If present, render as a numbered list with subtle background. Label: "How to interpret this data".
-
-5. DATA TABLE: Key numbers relevant to entity type (see entity-specific notes below).
-
-6. PEERS: If peer table present, show comparison table with subject company row highlighted.
-
-7. COMING UP: Upcoming catalysts and earnings dates.
-
-8. FOOTER: Sources count, generation time."""
+    # Sections string shared across entity types
+    sections = (
+        "HEADER(name/scale/CEO/sector) → METRIC CARDS(4-6) → "
+        "VERDICT(bold one-liner, momentum badge: accelerating=green/steady=blue/decelerating=red, "
+        "tailwind=green border/headwind=red/watch-for=amber) → "
+        "EVENTS(up to 5, dot: pos=green/neg=red/neutral=grey) → "
+        "DATA TABLE → PEERS(subject row bold+light-blue) → COMING UP → FOOTER"
+    )
+    alerts = (
+        "RSI>70→red Overbought box | RSI<30→green Oversold box | "
+        "MA200 dist>+30%→amber Extended warning | negative signal→amber news box"
+    )
+    base = (
+        "<!-- DISPLAY_HINT:\n"
+        "Build an HTML artifact dashboard. Prefer artifact over inline markdown.\n"
+        f"ALERTS (show above all): {alerts}\n"
+        f"Layout: {sections}\n"
+        "Skip null sections. Clean, professional."
+    )
 
     entity_specific = {
-        "public_equity": """
-
-Entity-specific (public_equity):
-- DATA TABLE columns: Price, 1D/30D change, 52W range, RSI-14, MA50 signal, MA200 signal, P/E, P/S, PEG, gross margin, operating margin, revenue growth.
-- Highlight RSI < 30 in green (oversold), RSI > 70 in red (overbought).
-- MA200 signal: above=green, below=red.
-- Show analyst target price with implied upside/downside if available.""",
-
-        "crypto": """
-
-Entity-specific (crypto):
-- DATA TABLE columns: Token price, 24h/30d change, market cap, TVL, MCap/TVL ratio, 24h volume.
-- MCap/TVL < 1.0 = green highlight. MCap/TVL > 5.0 = amber warning.
-- Show 30-day price trend prominently.""",
-
-        "private_or_unlisted": """
-
-Entity-specific (private):
-- DATA TABLE columns: Total raised, last round details, key investors, founded year.
-- Skip price, PE, and technical sections — no public market data.
-- Focus on funding trajectory and team.""",
-
-        "venture_capital": """
-
-Entity-specific (venture capital):
-- DATA TABLE columns: AUM, total investments, last fund, stage focus, notable portfolio.
-- Skip financial and technical sections.
-- Focus on portfolio and investment thesis.""",
-
-        "defunct": """
-
-Entity-specific (defunct):
-- Show DEFUNCT badge prominently in header (red background).
-- DATA TABLE columns: Peak valuation, shutdown date, creditor recovery %.
-- Focus recovery proceedings in the events section.""",
+        "public_equity": (
+            "\npublic_equity — "
+            "CARDS: MCap · RevGrowth · GrossMargin · P/E(PEG if avail). "
+            "TABLE: Price/1D/30D/52W/RSI/MA50/MA200/PE/PEG/PS/margins. "
+            "RSI<30=green, >70=red. MA200 above=green, below=red, dist>30%=amber."
+        ),
+        "crypto": (
+            "\ncrypto — "
+            "CARDS: MCap · TVL · MCap/TVL · 24hVol. "
+            "TABLE: price/24h/30d/MCap/TVL/MCap-TVL/vol. "
+            "MCap/TVL<1=green, >5=amber."
+        ),
+        "private_or_unlisted": (
+            "\nprivate — "
+            "CARDS: Raised · LastRound · Founded. "
+            "TABLE: raised/last-round/investors/founded. Skip price/technicals."
+        ),
+        "venture_capital": (
+            "\nventure_capital — "
+            "CARDS: AUM · Investments · LastFund · StageFocus. "
+            "TABLE: AUM/investments/fund/portfolio. Skip financial/technical."
+        ),
+        "defunct": (
+            "\ndefunct — DEFUNCT badge (red) in header. "
+            "TABLE: peak valuation/shutdown date/creditor recovery %."
+        ),
     }
 
     addition = entity_specific.get(entity_type, "")
-    return base + addition + "\n\nStyle: Clean, professional. Skip any section where data is null or empty.\n-->"
+    return base + addition + "\n-->"
 
 
 def build_structured_json_v3(data: dict) -> dict:
@@ -1391,6 +1381,24 @@ def format_output_v3(data: dict) -> str:
         if modules.get("financial") and peers:
             lines.append("| Company | P/E | Rev Growth | Margin | RSI-14 |")
             lines.append("|---------|-----|-----------|--------|--------|")
+            # Subject company row at top
+            _fin_s = modules["financial"]
+            _s_pe = (_fin_s.get("valuation") or {}).get("pe_ratio")
+            _s_pe_str = f"{float(_s_pe):.1f}" if _s_pe is not None else "—"
+            _s_margins = _fin_s.get("margins") or {}
+            _s_rg = _s_margins.get("revenue_growth_yoy")
+            _s_rg_str = str(_s_rg) if _s_rg else "—"
+            _s_gm = _s_margins.get("gross_margin")
+            try:
+                _s_gm_str = f"{float(_s_gm)*100:.1f}%" if _s_gm is not None else "—"
+            except (TypeError, ValueError):
+                _s_gm_str = str(_s_gm) if _s_gm else "—"
+            _s_rsi = (_fin_s.get("technicals") or {}).get("rsi_14")
+            try:
+                _s_rsi_str = f"{float(_s_rsi):.1f}" if _s_rsi is not None else "—"
+            except (TypeError, ValueError):
+                _s_rsi_str = "—"
+            lines.append(f"| **→ {identity['name']}** | **{_s_pe_str}** | **{_s_rg_str}** | **{_s_gm_str}** | **{_s_rsi_str}** |")
             for p in peers[:5]:
                 pe = p.get("pe", "N/A")
                 if isinstance(pe, (int, float)):
@@ -1417,18 +1425,21 @@ def format_output_v3(data: dict) -> str:
         lines.append("")
 
     # === VERDICT ===
+    _MOMENTUM_EMOJI = {"accelerating": "🚀", "steady": "➡️", "decelerating": "📉", "uncertain": "❓"}
     if verdict:
         lines.append("## Verdict")
         one_line = verdict.get("one_line", "")
         momentum = verdict.get("momentum", "")
-        lines.append(f"**{one_line}** ({momentum})")
+        m_emoji = _MOMENTUM_EMOJI.get((momentum or "").lower(), "")
+        suffix = f" {m_emoji} *{momentum}*" if momentum else ""
+        lines.append(f"**{one_line}**{suffix}")
         tailwind = verdict.get("tailwind", "")
         headwind = verdict.get("headwind", "")
         watch_for = verdict.get("watch_for", "")
         if tailwind:
-            lines.append(f"↑ {tailwind}")
+            lines.append(f"🟢 ↑ {tailwind}")
         if headwind:
-            lines.append(f"↓ {headwind}")
+            lines.append(f"🔴 ↓ {headwind}")
         if watch_for:
             lines.append(f"⏳ {watch_for}")
         lines.append("")
@@ -1448,13 +1459,15 @@ def format_output_v3(data: dict) -> str:
         _change_1d = price_data.get("change_1d") if price_data.get("change_1d") is not None else tech_data.get("change_1d")
         if _change_1d is not None:
             try:
-                price_parts.append(f"1D: {float(_change_1d):+.1f}%")
+                _v1d = float(_change_1d)
+                price_parts.append(f"1D: {'↑' if _v1d >= 0 else '↓'}{abs(_v1d):.1f}%")
             except (TypeError, ValueError):
                 pass
         _change_30d = price_data.get("change_30d") if price_data.get("change_30d") is not None else tech_data.get("change_30d")
         if _change_30d is not None:
             try:
-                price_parts.append(f"30D: {float(_change_30d):+.1f}%")
+                _v30d = float(_change_30d)
+                price_parts.append(f"30D: {'↑' if _v30d >= 0 else '↓'}{abs(_v30d):.1f}%")
             except (TypeError, ValueError):
                 pass
         if price_parts:
@@ -1498,17 +1511,23 @@ def format_output_v3(data: dict) -> str:
         tech_parts = []
         if tech_data.get("rsi_14"):
             try:
-                tech_parts.append(f"RSI: {float(tech_data['rsi_14']):.1f}")
+                _rsi_val = float(tech_data["rsi_14"])
+                _rsi_icon = "🔴" if _rsi_val > 70 else ("🔵" if _rsi_val < 30 else "🟢")
+                tech_parts.append(f"RSI: {_rsi_icon} {_rsi_val:.1f}")
             except (TypeError, ValueError):
                 pass
         if tech_data.get("ma50_signal"):
             try:
-                tech_parts.append(f"MA50: {tech_data['ma50_signal']} ({float(tech_data.get('ma50_distance_pct', 0)):+.1f}%)")
+                _dist50 = float(tech_data.get("ma50_distance_pct", 0))
+                _ext50 = " ⚠️" if _dist50 > 30 else ""
+                tech_parts.append(f"MA50: {tech_data['ma50_signal']} ({_dist50:+.1f}%{_ext50})")
             except (TypeError, ValueError):
                 pass
         if tech_data.get("ma200_signal"):
             try:
-                tech_parts.append(f"MA200: {tech_data['ma200_signal']} ({float(tech_data.get('ma200_distance_pct', 0)):+.1f}%)")
+                _dist200 = float(tech_data.get("ma200_distance_pct", 0))
+                _ext200 = " ⚠️" if _dist200 > 30 else ""
+                tech_parts.append(f"MA200: {tech_data['ma200_signal']} ({_dist200:+.1f}%{_ext200})")
             except (TypeError, ValueError):
                 pass
         if tech_parts:
