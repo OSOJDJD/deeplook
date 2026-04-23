@@ -23,7 +23,7 @@ from deeplook.fetchers.news import fetch_news
 from deeplook.fetchers.rootdata import fetch_rootdata
 from deeplook.fetchers.coingecko import fetch_coingecko
 from deeplook.fetchers.defillama import fetch_defillama, _resolve_defillama_slug
-from deeplook.fetchers.yfinance_data import fetch_yfinance, fetch_yfinance_news, _resolve_ticker, fetch_peer_data
+from deeplook.fetchers.yfinance_data import fetch_yfinance, fetch_yfinance_news, _resolve_ticker, fetch_peer_data, _calculate_rsi
 from deeplook.fetchers.wikipedia import fetch_wikipedia
 from deeplook.fetchers.youtube import fetch_youtube
 from deeplook.fetchers.sec_edgar import fetch_sec_edgar
@@ -605,29 +605,14 @@ def _build_technical_snapshot(yf_data: dict) -> dict | None:
 
 # ── v2 Code Processing Layer ───────────────────────────────────────────────
 
-def _calculate_rsi(closes: list, period: int = 14) -> float | None:
-    """Standard RSI calculation from list of closing prices. Returns None if insufficient data."""
-    if len(closes) < period + 1:
-        return None
-    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-    gains = [d if d > 0 else 0 for d in deltas[-period:]]
-    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 1)
-
-
 def _fetch_rsi_for_ticker(ticker: str) -> float | None:
-    """Fetch 1mo history for a peer ticker and compute RSI-14."""
+    """Fetch 3mo history for a peer ticker and compute RSI-14 (Wilder's smoothing)."""
     try:
         import yfinance as yf
-        hist = yf.Ticker(ticker).history(period="1mo", timeout=10)
-        if hist.empty or len(hist) < 15:
+        hist = yf.Ticker(ticker).history(period="3mo", timeout=10)
+        if hist.empty or len(hist) < 30:
             return None
-        return _calculate_rsi(hist["Close"].tolist())
+        return _calculate_rsi(hist["Close"])
     except Exception:
         return None
 

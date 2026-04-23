@@ -125,8 +125,8 @@ def _calculate_rsi(series, period: int = 14) -> float | None:
     """Calculate RSI(period) from a closing price Series."""
     try:
         delta = series.diff()
-        gain = delta.where(delta > 0, 0).rolling(period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+        gain = delta.where(delta > 0, 0).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         val = rsi.iloc[-1]
@@ -140,14 +140,15 @@ def _calculate_rsi(series, period: int = 14) -> float | None:
 
 def _get_info(ticker_symbol: str) -> tuple:
     """Blocking yfinance call — must run in thread.
-    Returns (info, hist_3mo, calendar_dict).
+    Returns (info, hist_3mo, calendar_dict, hist_1y).
     """
     ticker = yf.Ticker(ticker_symbol)
     info = ticker.info
     if not info or info.get("regularMarketPrice") is None and info.get("currentPrice") is None:
-        return None, None, {}
+        return None, None, {}, None
 
     hist = ticker.history(period="3mo")
+    hist_1y = ticker.history(period="1y", auto_adjust=False)
 
     calendar = {}
     try:
@@ -159,7 +160,7 @@ def _get_info(ticker_symbol: str) -> tuple:
     except Exception:
         pass
 
-    return info, hist, calendar
+    return info, hist, calendar, hist_1y
 
 
 async def fetch_yfinance(company_name: str) -> dict:
@@ -213,13 +214,13 @@ async def fetch_yfinance(company_name: str) -> dict:
     try:
         # Check hardcoded ticker mapping first (e.g. TSMC → TSM to avoid ADR/currency mismatch)
         _initial_ticker = _TICKER_HARDCODED.get(company_name, company_name)
-        info, hist, calendar = await asyncio.to_thread(_get_info, _initial_ticker)
+        info, hist, calendar, hist_1y = await asyncio.to_thread(_get_info,_initial_ticker)
 
         # 查不到時，用 Yahoo Finance search 解析真實 ticker
         if info is None:
             resolved = await _resolve_ticker(company_name)
             if resolved:
-                info, hist, calendar = await asyncio.to_thread(_get_info, resolved)
+                info, hist, calendar, hist_1y = await asyncio.to_thread(_get_info,resolved)
 
         if info is None:
             result["error"] = f"No data found for '{company_name}'"
@@ -268,8 +269,9 @@ async def fetch_yfinance(company_name: str) -> dict:
         # Technical snapshot fields
         result["fiftyTwoWeekHigh"] = info.get("fiftyTwoWeekHigh")
         result["fiftyTwoWeekLow"] = info.get("fiftyTwoWeekLow")
-        result["fiftyDayAverage"] = info.get("fiftyDayAverage")
-        result["twoHundredDayAverage"] = info.get("twoHundredDayAverage")
+        _close_1y = hist_1y["Close"] if hist_1y is not None and not hist_1y.empty else None
+        result["fiftyDayAverage"] = round(float(_close_1y.rolling(50).mean().iloc[-1]), 4) if _close_1y is not None and len(_close_1y) >= 50 else info.get("fiftyDayAverage")
+        result["twoHundredDayAverage"] = round(float(_close_1y.rolling(200).mean().iloc[-1]), 4) if _close_1y is not None and len(_close_1y) >= 200 else info.get("twoHundredDayAverage")
 
         # Earnings surprise (most recent quarter)
         trailing_eps = info.get("trailingEps")
