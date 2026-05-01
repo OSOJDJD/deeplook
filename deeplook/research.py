@@ -8,6 +8,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import sys
 import time
 from contextlib import redirect_stdout
@@ -72,6 +73,9 @@ DEFUNCT_COMPANIES = _load_defunct()
 
 DISAMBIGUATION = _load_disambiguation()
 
+# Matches bare ticker symbols: 1-5 uppercase letters, optional dot-suffix (e.g. BRK.B)
+_TICKER_RE = re.compile(r'^[A-Z]{1,5}(\.[A-Z]{1,2})?$')
+
 
 def load_env():
     load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
@@ -119,300 +123,420 @@ def refine_entity_type(company_name: str, company_type: str) -> str:
     return company_type
 
 
-async def _coingecko_search_mcap(company_name: str, client: httpx.AsyncClient) -> tuple[str | None, int]:
-    """Search CoinGecko for company_name. Returns (coin_id, market_cap_usd) or (None, 0)."""
-    coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
-    try:
-        resp = await client.get(
-            "https://api.coingecko.com/api/v3/search",
-            params={"query": company_name},
-            headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        name_lower = company_name.lower()
-        for coin in data.get("coins", []):
-            coin_name = coin.get("name", "").lower()
-            coin_symbol = coin.get("symbol", "").lower()
-            if not (coin_name == name_lower or coin_symbol == name_lower
-                    or name_lower == coin_name.split()[0]):
-                continue
-            coin_id = coin.get("id", "")
-            mcap_rank = coin.get("market_cap_rank")
-            if mcap_rank is not None and mcap_rank > 0:
-                # Fetch actual mcap from detail endpoint
-                try:
-                    detail_resp = await client.get(
-                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                        params={"localization": "false", "tickers": "false",
-                                "community_data": "false", "developer_data": "false"},
-                        headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
-                    )
-                    detail_resp.raise_for_status()
-                    detail = detail_resp.json()
-                    mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
-                    if mcap and mcap > 10_000_000:  # $10M threshold — ignore meme/micro-cap tokens
-                        return coin_id, int(mcap)
-                except Exception:
-                    pass
-                return coin_id, 0
-    except Exception as e:
-        print(f"[detect] CoinGecko search failed: {e}", file=sys.stderr)
-    return None, 0
+async def _coingecko_search_full(company_name: str) -> dict | None:
+    """Multi-strategy CoinGecko search for entity detection.
 
-
-async def detect_company_type(company_name: str) -> tuple[str, str | None, str | None]:
-    """Detect whether the company is crypto, public_equity, or private.
-
-    Returns (company_type, resolved_ticker, company_full_name).
-    company_full_name is the human-readable name from yfinance (e.g. "Coherent Corp.").
+    Tries: full query → first word → last word.
+    Returns {coin_id, name, symbol, price_usd, market_cap} or None.
+    Only returns coins with market_cap > 0.
     """
-    _route_start = time.time()
-    _yf_method = None
+    coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
+    input_lower = company_name.lower()
+    words = company_name.split()
+    queries = [company_name]
+    if len(words) > 1:
+        queries.append(words[0])
+        queries.append(words[-1])
 
-    # 0a. Defunct check — skip all API calls for known collapsed companies
-    name_lower = company_name.lower().strip()
-    if name_lower in DEFUNCT_COMPANIES:
-        print(f"[detect] DEFUNCT: '{company_name}' is in known defunct companies list")
-        log("detect", "ENTITY_ROUTE",
-            f"'{company_name}' → defunct via defunct "
-            f"(ticker=None) [{time.time()-_route_start:.1f}s]")
-        return "defunct", None, None
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for query in queries:
+            try:
+                resp = await client.get(
+                    "https://api.coingecko.com/api/v3/search",
+                    params={"query": query},
+                    headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                q_lower = query.lower()
+                best: dict | None = None
+                best_mcap = 0
 
-    # 0. Disambiguation table — known name conflicts, checked before any API call
-    if name_lower in DISAMBIGUATION:
-        d = DISAMBIGUATION[name_lower]
-        print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} (ticker={d.get('ticker')}) ({d['note']})")
-        log("detect", "ENTITY_ROUTE",
-            f"'{company_name}' → {d['intended_type']} via disambiguation "
-            f"(ticker={d.get('ticker')}) [{time.time()-_route_start:.1f}s]")
-        return d["intended_type"], d.get("ticker"), None
+                for coin in data.get("coins", []):
+                    coin_name = coin.get("name", "").lower()
+                    coin_symbol = coin.get("symbol", "").lower()
+                    is_name_match = input_lower in coin_name or coin_name in input_lower
+                    if not (is_name_match or coin_symbol == q_lower):
+                        continue
+                    coin_id = coin.get("id", "")
+                    mcap_rank = coin.get("market_cap_rank")
+                    if not (mcap_rank is not None and mcap_rank > 0):
+                        continue
+                    try:
+                        detail_resp = await client.get(
+                            f"https://api.coingecko.com/api/v3/coins/{coin_id}",
+                            params={"localization": "false", "tickers": "false",
+                                    "community_data": "false", "developer_data": "false"},
+                            headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
+                        )
+                        detail_resp.raise_for_status()
+                        detail = detail_resp.json()
+                        mdata = detail.get("market_data") or {}
+                        mcap = (mdata.get("market_cap") or {}).get("usd") or 0
+                        price = (mdata.get("current_price") or {}).get("usd") or 0
+                        if mcap > best_mcap:
+                            best_mcap = int(mcap)
+                            best = {
+                                "coin_id": coin_id,
+                                "name": detail.get("name") or coin.get("name", ""),
+                                "symbol": (detail.get("symbol") or coin.get("symbol", "")).upper(),
+                                "price_usd": price,
+                                "market_cap": int(mcap),
+                            }
+                    except Exception:
+                        pass
 
-    # 1. Try yfinance first — direct ticker match
+                if best and best_mcap > 0:
+                    return best
+            except Exception as e:
+                print(f"[detect] CoinGecko search '{query}' failed: {e}", file=sys.stderr)
+
+    return None
+
+
+async def _stock_detect(company_name: str) -> dict | None:
+    """Resolve company name/ticker to a stock entry.
+
+    Flow:
+      1. yFinance direct ticker — only when query looks like a ticker symbol
+      2. Finnhub /search — primary name resolver; yFinance used for price/mcap enrichment
+      3. yFinance name resolution — last-resort fallback when Finnhub returns nothing
+
+    Returns {ticker, name, market_cap, price, method} or None.
+    market_cap=0 means ticker was found but financial data is unavailable
+    (usable for routing, excluded from disambiguation).
+    """
+    query = company_name.strip()
+    query_upper = query.upper()
+
     yf_mcap = 0
     yf_ticker = None
     yf_fullname = None
-    try:
-        def _direct_check():
-            info = yf.Ticker(company_name).info
-            mcap = (info.get("marketCap") or 0) if info else 0
-            name = (info.get("shortName") or info.get("longName")) if info else None
-            return mcap, name
-        yf_mcap, yf_fullname = await asyncio.wait_for(
-            asyncio.to_thread(_direct_check), timeout=10
-        )
-        if yf_mcap > 0:
-            yf_ticker = company_name
-            _yf_method = "yfinance_direct"
-        else:
-            yf_fullname = None
-    except (asyncio.TimeoutError, Exception) as e:
-        print(f"yfinance detection failed: {e}", file=sys.stderr)
+    yf_price = None
+    _yf_method = None
 
-    # 1b. Try resolving company name → ticker via Yahoo Finance search
+    # Step 1: direct ticker — only when query matches ticker pattern
+    if _TICKER_RE.match(query_upper):
+        try:
+            def _direct_check():
+                info = yf.Ticker(query_upper).info
+                mcap = (info.get("marketCap") or 0) if info else 0
+                name = (info.get("shortName") or info.get("longName")) if info else None
+                price = (info.get("regularMarketPrice") or info.get("currentPrice")) if info else None
+                return mcap, name, price
+            yf_mcap, yf_fullname, yf_price = await asyncio.wait_for(
+                asyncio.to_thread(_direct_check), timeout=10
+            )
+            if yf_mcap > 0:
+                yf_ticker = query_upper
+                _yf_method = "yfinance_direct"
+            else:
+                yf_fullname = None
+                yf_price = None
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"yfinance detection failed: {e}", file=sys.stderr)
+
+    # Step 2: Finnhub search — primary name resolver
     if not yf_ticker:
         try:
-            resolved = await asyncio.wait_for(_resolve_ticker(company_name), timeout=10)
+            fh_client = _finnhub_get_client()
+            if fh_client is not None:
+                def _finnhub_search():
+                    return fh_client.symbol_lookup(query)
+                fh_result = await asyncio.wait_for(
+                    asyncio.to_thread(_finnhub_search), timeout=5
+                )
+                fh_matches = fh_result.get("result") or []
+                # Prefer Common Stock / ETP (ETFs) / ADR; filter out OTC (dot = non-US exchange)
+                typed = [r for r in fh_matches if r.get("type") in ("Common Stock", "ETP", "ADR")]
+                us_only = [r for r in typed if "." not in r.get("symbol", "")]
+                candidates = us_only or typed or fh_matches
+
+                # Pick best candidate: first result whose description overlaps the query
+                best = None
+                q_words = set(query.lower().split())
+                for r in candidates:
+                    d_words = set(r.get("description", "").lower().replace(".", " ").split())
+                    if q_words.intersection(d_words):
+                        best = r
+                        break
+                if best is None and candidates:
+                    best = candidates[0]
+
+                if best:
+                    symbol = best.get("symbol", "")
+                    description = best.get("description", "")
+                    print(f"[detect] FINNHUB_PRIMARY: '{query}' -> '{symbol}' ({description})")
+                    # Enrich with yFinance data; exception = treat as no match, fall to step 3
+                    try:
+                        def _yf_enrich():
+                            info = yf.Ticker(symbol).info
+                            mcap = (info.get("marketCap") or 0) if info else 0
+                            name = (info.get("shortName") or info.get("longName")) if info else None
+                            price = (info.get("regularMarketPrice") or info.get("currentPrice")) if info else None
+                            return mcap, name, price
+                        _mcap, _name, _price = await asyncio.wait_for(
+                            asyncio.to_thread(_yf_enrich), timeout=10
+                        )
+                        yf_ticker = symbol
+                        yf_fullname = _name or description
+                        yf_mcap = _mcap
+                        yf_price = _price if _mcap > 0 else None
+                        _yf_method = "finnhub_primary"
+                        if _mcap == 0:
+                            print(f"[detect] FINNHUB_PRIMARY: '{symbol}' yFinance mcap=0, ticker stored without financial data")
+                    except (asyncio.TimeoutError, Exception) as e:
+                        print(f"[detect] Finnhub primary yFinance enrich failed: {e}", file=sys.stderr)
+        except (asyncio.TimeoutError, Exception) as e:
+            print(f"[detect] Finnhub primary search failed: {e}", file=sys.stderr)
+
+    # Step 3: yFinance name resolution — last-resort fallback
+    if not yf_ticker:
+        try:
+            resolved = await asyncio.wait_for(_resolve_ticker(query), timeout=10)
             if resolved:
                 def _resolved_check():
                     info = yf.Ticker(resolved).info
                     mcap = (info.get("marketCap") or 0) if info else 0
                     name = (info.get("shortName") or info.get("longName")) if info else None
-                    return mcap, name
-                _mcap, _name = await asyncio.wait_for(
+                    price = (info.get("regularMarketPrice") or info.get("currentPrice")) if info else None
+                    return mcap, name, price
+                _mcap, _name, _price = await asyncio.wait_for(
                     asyncio.to_thread(_resolved_check), timeout=10
                 )
                 if _mcap > 0:
-                    # Layer 3 sanity check: reject if resolved company name has zero
-                    # word overlap with the query (e.g. "Canva" → "Covanta Holding").
-                    # Skip this check when the query is already in ticker format.
-                    if not (company_name.isupper() and len(company_name) <= 5) and _name:
-                        q_words = set(company_name.lower().split())
+                    if not _TICKER_RE.match(query_upper) and _name:
+                        q_words = set(query.lower().split())
                         n_words = set(_name.lower().replace(".", " ").split())
                         if not q_words.intersection(n_words):
-                            print(f"[detect] NAME_MISMATCH: '{company_name}' -> '{_name}' "
+                            print(f"[detect] NAME_MISMATCH: '{query}' -> '{_name}' "
                                   f"(ticker={resolved}) — no overlap, continuing to crypto checks")
-                            _mcap = 0  # reject; fall through to CoinGecko / DeFiLlama
+                            _mcap = 0
                     if _mcap > 0:
                         yf_mcap = _mcap
                         yf_ticker = resolved
                         yf_fullname = _name
+                        yf_price = _price
                         _yf_method = "yfinance_search"
         except (asyncio.TimeoutError, Exception) as e:
             import traceback
             print(f"yfinance name resolution failed: {e}", file=sys.stderr)
             traceback.print_exc()
 
-    # 1d. Finnhub symbol_lookup fallback — only runs if yfinance both steps failed
-    if not yf_ticker:
-        try:
-            fh_client = _finnhub_get_client()
-            if fh_client is not None:
-                def _finnhub_lookup():
-                    return fh_client.symbol_lookup(company_name)
-                fh_result = await asyncio.wait_for(
-                    asyncio.to_thread(_finnhub_lookup), timeout=5
-                )
-                fh_matches = [
-                    r for r in (fh_result.get("result") or [])
-                    if r.get("type") in ("Common Stock", "ADR")
-                ]
-                # Prefer US symbols (no dot) over international
-                us_matches = [r for r in fh_matches if "." not in r.get("symbol", "")]
-                candidates = us_matches or fh_matches
-                for r in candidates:
-                    symbol = r.get("symbol", "")
-                    description = r.get("description", "")
-                    # Name overlap sanity check (same logic as step 1b)
-                    if not (company_name.isupper() and len(company_name) <= 5) and description:
-                        q_words = set(company_name.lower().split())
-                        d_words = set(description.lower().replace(".", " ").split())
-                        if not q_words.intersection(d_words):
-                            print(f"[detect] FINNHUB_NAME_MISMATCH: '{company_name}' -> '{description}' ({symbol}) — no overlap, skipping")
-                            continue
-                    yf_ticker = symbol
-                    yf_fullname = description
-                    _yf_method = "finnhub"
-                    print(f"[detect] FINNHUB_FALLBACK: '{company_name}' -> '{symbol}' ({description})")
-                    break
-        except (asyncio.TimeoutError, Exception) as e:
-            print(f"[detect] Finnhub fallback failed: {e}", file=sys.stderr)
-
-    # 1c. If yfinance found a match, compare with CoinGecko market cap to resolve conflicts
+    if yf_ticker and yf_mcap > 0:
+        return {"ticker": yf_ticker, "name": yf_fullname, "market_cap": yf_mcap, "price": yf_price, "method": _yf_method}
     if yf_ticker:
+        # Ticker resolved but no market_cap — usable for routing, excluded from disambiguation
+        return {"ticker": yf_ticker, "name": yf_fullname, "market_cap": 0, "price": None, "method": _yf_method}
+    return None
+
+
+async def detect_company_type(company_name: str, entity_type: str | None = None) -> tuple[str, str | None, str | None, dict | None]:
+    """Detect whether the company is crypto, public_equity, private, or defunct.
+
+    entity_type: force routing — "stock" (yFinance only), "crypto" (CoinGecko only),
+    or None (auto-detect from input format: ticker pattern → stock-first, name → crypto-first).
+    Returns (company_type, resolved_ticker, company_full_name, None).
+    """
+    _route_start = time.time()
+    name_lower = company_name.lower().strip()
+
+    # 0a. Defunct check — skip all API calls for known collapsed companies
+    if name_lower in DEFUNCT_COMPANIES:
+        print(f"[detect] DEFUNCT: '{company_name}' is in known defunct companies list")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → defunct via defunct "
+            f"(ticker=None) [{time.time()-_route_start:.1f}s]")
+        return "defunct", None, None, None
+
+    # 0b. Disambiguation table — pre-resolved conflicts; takes priority over entity_type
+    if name_lower in DISAMBIGUATION:
+        d = DISAMBIGUATION[name_lower]
+        print(f"[detect] DISAMBIGUATION: '{company_name}' -> {d['intended_type']} (ticker={d.get('ticker')}) ({d['note']})")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → {d['intended_type']} via disambiguation "
+            f"(ticker={d.get('ticker')}) [{time.time()-_route_start:.1f}s]")
+        return d["intended_type"], d.get("ticker"), None, None
+
+    # 1. Forced entity_type — skip format-based auto-detection
+    if entity_type == "stock":
+        try:
+            yf_result = await asyncio.wait_for(_stock_detect(company_name), timeout=15.0)
+        except Exception as e:
+            print(f"[detect] forced stock detection failed: {e}", file=sys.stderr)
+            yf_result = None
+        if yf_result and yf_result.get("ticker"):
+            yf_ticker = yf_result["ticker"]
+            _yf_method = yf_result.get("method", "yfinance")
+            print(f"Detected type: public_equity (forced stock, ticker={yf_ticker})")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → public_equity via forced_stock/{_yf_method} "
+                f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
+            return "public_equity", yf_ticker, yf_result.get("name"), None
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → public_equity via forced_stock/no_ticker [{time.time()-_route_start:.1f}s]")
+        return "public_equity", None, None, None
+
+    if entity_type == "crypto":
+        try:
+            cg_result = await asyncio.wait_for(_coingecko_search_full(company_name), timeout=5.0)
+        except Exception as e:
+            print(f"[detect] forced crypto CoinGecko failed: {e}", file=sys.stderr)
+            cg_result = None
+        if cg_result:
+            print(f"Detected type: crypto (forced, CoinGecko matched '{cg_result['name']}')")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → crypto via forced_crypto/coingecko "
+                f"(coin='{cg_result['name']}') [{time.time()-_route_start:.1f}s]")
+            return "crypto", None, None, None
+        # CoinGecko miss → try DeFiLlama
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                cg_coin_id, cg_mcap = await _coingecko_search_mcap(company_name, client)
-                if cg_mcap > 0 and yf_mcap > 0 and cg_mcap > yf_mcap * 10:
-                    print(f"[detect] MCAP_OVERRIDE: CoinGecko ${cg_mcap:,.0f} >> yfinance ${yf_mcap:,.0f}, using crypto")
-                    log("detect", "ENTITY_ROUTE",
-                        f"'{company_name}' → crypto via coingecko_override "
-                        f"(ticker=None) [{time.time()-_route_start:.1f}s]")
-                    return "crypto", None, None
-        except Exception as e:
-            print(f"[detect] CoinGecko mcap comparison failed: {e}", file=sys.stderr)
-        print(f"Detected type: public_equity (yfinance ticker={yf_ticker} fullname={yf_fullname} marketCap={yf_mcap})")
-        log("detect", "ENTITY_ROUTE",
-            f"'{company_name}' → public_equity via {_yf_method or 'yfinance'} "
-            f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
-        return "public_equity", yf_ticker, yf_fullname
-
-    # 2. Try CoinGecko with strict name matching
-    coingecko_key = os.environ.get("COINGECKO_API_KEY", "")
-    _cg_matched_coin = None  # set when a valid crypto match is found
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://api.coingecko.com/api/v3/search",
-                params={"query": company_name},
-                headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            name_lower = company_name.lower()
-            for coin in data.get("coins", []):
-                coin_name = coin.get("name", "").lower()
-                coin_symbol = coin.get("symbol", "").lower()
-                if not (coin_name == name_lower or coin_symbol == name_lower
-                        or name_lower == coin_name.split()[0]):
-                    continue
-                mcap_rank = coin.get("market_cap_rank")
-                if mcap_rank is not None and mcap_rank > 0:
-                    _cg_matched_coin = coin.get("name")
-                    break
-                coin_id = coin.get("id", "")
-                try:
-                    detail_resp = await client.get(
-                        f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                        params={"localization": "false", "tickers": "false",
-                                "community_data": "false", "developer_data": "false"},
-                        headers={"x-cg-demo-api-key": coingecko_key} if coingecko_key else {},
-                    )
-                    detail_resp.raise_for_status()
-                    detail = detail_resp.json()
-                    mcap = (detail.get("market_data") or {}).get("market_cap", {}).get("usd", 0)
-                    if mcap and mcap > 10_000_000:  # $10M threshold — ignore meme/micro-cap tokens
-                        _cg_matched_coin = coin.get("name")
-                        break
-                    elif mcap:
-                        print(f"[detect] MEME_TOKEN_SKIP: '{coin.get('name')}' mcap=${mcap:,.0f} < $10M threshold — treating as not-crypto")
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"CoinGecko detection failed: {e}", file=sys.stderr)
-
-    if _cg_matched_coin:
-        # Wikipedia guard: verify this is actually a crypto project, not a real company
-        # with a same-name meme token on CoinGecko.
-        _wiki_confirmed = True  # default: trust CoinGecko
-        try:
-            wiki_result = await asyncio.wait_for(
-                fetch_wikipedia(company_name), timeout=3.0
-            )
-            wiki_text = (wiki_result or {}).get("extract", "")
-            if len(wiki_text) > 100:
-                _crypto_kws = [
-                    "blockchain", "cryptocurrency", "token", "defi",
-                    "web3", "decentralized", "crypto", "mining pool",
-                    "consensus mechanism", "smart contract", "dapp",
-                    "decentralized finance", "liquidity pool",
-                ]
-                if not any(kw in wiki_text.lower() for kw in _crypto_kws):
-                    _wiki_confirmed = False
-                    log("detect", "WIKI_GUARD",
-                        f"'{company_name}' Wikipedia article has no crypto keywords "
-                        f"— overriding CoinGecko match '{_cg_matched_coin}'")
-                else:
-                    log("detect", "WIKI_GUARD",
-                        f"'{company_name}' Wikipedia has crypto keywords "
-                        f"— confirming CoinGecko match '{_cg_matched_coin}'")
-        except (asyncio.TimeoutError, Exception) as e:
-            log("detect", "WIKI_GUARD",
-                f"'{company_name}' Wikipedia check failed ({e}) — keeping CoinGecko match")
-
-        if not _wiki_confirmed:
-            log("detect", "ENTITY_ROUTE",
-                f"'{company_name}' → private_or_unlisted via coingecko_wiki_blocked "
-                f"(ticker=None) [{time.time()-_route_start:.1f}s]")
-            return "private_or_unlisted", None, None
-
-        print(f"Detected type: crypto (CoinGecko matched '{_cg_matched_coin}')")
-        log("detect", "ENTITY_ROUTE",
-            f"'{company_name}' → crypto via coingecko "
-            f"(coin='{_cg_matched_coin}', ticker=None) [{time.time()-_route_start:.1f}s]")
-        return "crypto", None, None
-
-    # 3. Try DeFiLlama — catches DeFi protocols not on CoinGecko
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            slug = await _resolve_defillama_slug(company_name, client)
-            if slug:
-                tvl_resp = await client.get(
-                    f"https://api.llama.fi/tvl/{slug}", timeout=10
-                )
-                if tvl_resp.status_code == 200:
-                    tvl = float(tvl_resp.text.strip())
-                    found = tvl > 0
-                    print(f"[detect] DeFiLlama check for '{company_name}': found={found} (slug={slug}, tvl={tvl:,.0f})")
-                    if found:
-                        print(f"Detected type: crypto (DeFiLlama slug='{slug}', tvl={tvl:,.0f})")
+                slug = await _resolve_defillama_slug(company_name, client)
+                if slug:
+                    tvl_resp = await client.get(f"https://api.llama.fi/tvl/{slug}", timeout=10)
+                    if tvl_resp.status_code == 200 and float(tvl_resp.text.strip()) > 0:
                         log("detect", "ENTITY_ROUTE",
-                            f"'{company_name}' → crypto via defillama "
-                            f"(ticker=None) [{time.time()-_route_start:.1f}s]")
-                        return "crypto", None, None
-                else:
-                    print(f"[detect] DeFiLlama check for '{company_name}': found=False (HTTP {tvl_resp.status_code})")
-            else:
-                print(f"[detect] DeFiLlama check for '{company_name}': found=False (no slug resolved)")
-    except Exception as e:
-        print(f"DeFiLlama detection failed: {e}", file=sys.stderr)
+                            f"'{company_name}' → crypto via forced_crypto/defillama [{time.time()-_route_start:.1f}s]")
+                        return "crypto", None, None, None
+        except Exception as e:
+            print(f"[detect] forced crypto DeFiLlama failed: {e}", file=sys.stderr)
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → crypto via forced_crypto/no_match [{time.time()-_route_start:.1f}s]")
+        return "crypto", None, None, None
 
-    # 4. Default — not public, not crypto: treat as private/unlisted startup
-    print("Detected type: private_or_unlisted")
-    log("detect", "ENTITY_ROUTE",
-        f"'{company_name}' → private_or_unlisted via default_private "
-        f"(ticker=None) [{time.time()-_route_start:.1f}s]")
-    return "private_or_unlisted", None, None
+    # 2. Auto-detect from input format: ticker-like → stock-first; name-like → crypto-first
+    is_ticker_format = bool(_TICKER_RE.match(company_name.strip().upper()))
+
+    if is_ticker_format:
+        # Ticker format: yFinance/Finnhub first, CoinGecko as fallback
+        try:
+            yf_result = await asyncio.wait_for(_stock_detect(company_name), timeout=15.0)
+        except Exception as e:
+            print(f"[detect] yFinance detection failed: {e}", file=sys.stderr)
+            yf_result = None
+
+        yf_mcap = (yf_result or {}).get("market_cap", 0) or 0
+
+        if yf_mcap > 0:
+            yf_ticker = yf_result["ticker"]
+            _yf_method = yf_result.get("method", "yfinance")
+            print(f"Detected type: public_equity (yfinance ticker={yf_ticker} marketCap={yf_mcap})")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → public_equity via {_yf_method} "
+                f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
+            return "public_equity", yf_ticker, yf_result.get("name"), None
+
+        # yFinance miss or mcap=0 → try CoinGecko (e.g. BTC, ETH, SOL as tickers)
+        try:
+            cg_result = await asyncio.wait_for(_coingecko_search_full(company_name), timeout=5.0)
+        except Exception as e:
+            print(f"[detect] CoinGecko detection failed: {e}", file=sys.stderr)
+            cg_result = None
+
+        if cg_result and (cg_result.get("market_cap") or 0) > 0:
+            print(f"Detected type: crypto (CoinGecko matched '{cg_result['name']}')")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → crypto via coingecko "
+                f"(coin='{cg_result['name']}') [{time.time()-_route_start:.1f}s]")
+            return "crypto", None, None, None
+
+        # yFinance found ticker without mcap → still route as stock
+        if yf_result and yf_result.get("ticker"):
+            yf_ticker = yf_result["ticker"]
+            _yf_method = yf_result.get("method", "yfinance")
+            print(f"Detected type: public_equity (yfinance ticker={yf_ticker} mcap=0)")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → public_equity via {_yf_method}/no_mcap "
+                f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
+            return "public_equity", yf_ticker, yf_result.get("name"), None
+
+        print("Detected type: private_or_unlisted (ticker format, no match)")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → private_or_unlisted via ticker_no_match [{time.time()-_route_start:.1f}s]")
+        return "private_or_unlisted", None, None, None
+
+    else:
+        # Name format: CoinGecko first, stock detection as fallback
+        try:
+            cg_result = await asyncio.wait_for(_coingecko_search_full(company_name), timeout=5.0)
+        except Exception as e:
+            print(f"[detect] CoinGecko detection failed: {e}", file=sys.stderr)
+            cg_result = None
+
+        if cg_result:
+            # Wikipedia guard to prevent meme-token hijack of company names
+            _cg_matched_coin = cg_result["name"]
+            _wiki_confirmed = True
+            try:
+                wiki_result = await asyncio.wait_for(
+                    fetch_wikipedia(company_name), timeout=3.0
+                )
+                wiki_text = (wiki_result or {}).get("extract", "")
+                if len(wiki_text) > 100:
+                    _crypto_kws = [
+                        "blockchain", "cryptocurrency", "token", "defi",
+                        "web3", "decentralized", "crypto", "mining pool",
+                        "consensus mechanism", "smart contract", "dapp",
+                        "decentralized finance", "liquidity pool",
+                    ]
+                    if not any(kw in wiki_text.lower() for kw in _crypto_kws):
+                        _wiki_confirmed = False
+                        log("detect", "WIKI_GUARD",
+                            f"'{company_name}' Wikipedia article has no crypto keywords "
+                            f"— overriding CoinGecko match '{_cg_matched_coin}'")
+                    else:
+                        log("detect", "WIKI_GUARD",
+                            f"'{company_name}' Wikipedia has crypto keywords "
+                            f"— confirming CoinGecko match '{_cg_matched_coin}'")
+            except (asyncio.TimeoutError, Exception) as e:
+                log("detect", "WIKI_GUARD",
+                    f"'{company_name}' Wikipedia check failed ({e}) — keeping CoinGecko match")
+
+            if _wiki_confirmed:
+                print(f"Detected type: crypto (CoinGecko matched '{_cg_matched_coin}')")
+                log("detect", "ENTITY_ROUTE",
+                    f"'{company_name}' → crypto via coingecko "
+                    f"(coin='{_cg_matched_coin}') [{time.time()-_route_start:.1f}s]")
+                return "crypto", None, None, None
+
+        # CoinGecko miss (or wiki-blocked) → try stock detection (Finnhub → yFinance)
+        try:
+            yf_result = await asyncio.wait_for(_stock_detect(company_name), timeout=15.0)
+        except Exception as e:
+            print(f"[detect] yFinance detection failed: {e}", file=sys.stderr)
+            yf_result = None
+
+        if yf_result and yf_result.get("ticker"):
+            yf_ticker = yf_result["ticker"]
+            yf_mcap = yf_result.get("market_cap", 0) or 0
+            _yf_method = yf_result.get("method", "yfinance")
+            print(f"Detected type: public_equity (yfinance ticker={yf_ticker} marketCap={yf_mcap})")
+            log("detect", "ENTITY_ROUTE",
+                f"'{company_name}' → public_equity via {_yf_method} "
+                f"(ticker={yf_ticker}) [{time.time()-_route_start:.1f}s]")
+            return "public_equity", yf_ticker, yf_result.get("name"), None
+
+        # Try DeFiLlama — catches DeFi protocols not on CoinGecko
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                slug = await _resolve_defillama_slug(company_name, client)
+                if slug:
+                    tvl_resp = await client.get(f"https://api.llama.fi/tvl/{slug}", timeout=10)
+                    if tvl_resp.status_code == 200:
+                        tvl = float(tvl_resp.text.strip())
+                        if tvl > 0:
+                            print(f"Detected type: crypto (DeFiLlama slug='{slug}', tvl={tvl:,.0f})")
+                            log("detect", "ENTITY_ROUTE",
+                                f"'{company_name}' → crypto via defillama [{time.time()-_route_start:.1f}s]")
+                            return "crypto", None, None, None
+        except Exception as e:
+            print(f"DeFiLlama detection failed: {e}", file=sys.stderr)
+
+        print("Detected type: private_or_unlisted")
+        log("detect", "ENTITY_ROUTE",
+            f"'{company_name}' → private_or_unlisted via default_private [{time.time()-_route_start:.1f}s]")
+        return "private_or_unlisted", None, None, None
 
 
 async def run_fetcher(name: str, coro, timeout_seconds: int = 30):
@@ -1201,15 +1325,16 @@ def _deterministic_search_queries(company_name: str, entity_type: str, round1_da
     return {"news_queries": news_queries, "youtube_queries": youtube_queries}
 
 
-async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False, use_llm: bool = False) -> dict:
+async def run_research(company_name: str, include_youtube: bool = True, output_file: str | None = None, layer1: bool = False, use_llm: bool = False, entity_type: str | None = None) -> dict:
     t0 = time.time()
     _timing: dict = {}
 
     _t = time.time()
-    company_type, resolved_ticker, company_full_name = await detect_company_type(company_name)
-    entity_type = refine_entity_type(company_name, company_type)
+    company_type, resolved_ticker, company_full_name, _ = await detect_company_type(company_name, entity_type=entity_type)
     _timing["entity_routing"] = round(time.time() - _t, 2)
     print(f"[pipeline] {company_name} -> type={company_type}, ticker={resolved_ticker}, full_name={company_full_name}")
+
+    entity_type = refine_entity_type(company_name, company_type)
     print(f"[pipeline] entity_type refined: {company_type} -> {entity_type}")
 
     # ── Search Intelligence Layer ──────────────────────────────────────────

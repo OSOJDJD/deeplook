@@ -234,10 +234,11 @@ async def _asgi_send_redirect(send, location: str):
 
 
 class _ClientIPMiddleware:
-    """Pure-ASGI middleware that sets client_ip_var for each HTTP request."""
+    """Pure-ASGI middleware that sets client_ip_var and routes /api/* to the REST app."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, rest_app=None) -> None:
         self._app = app
+        self._rest_app = rest_app
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http":
@@ -326,7 +327,10 @@ class _ClientIPMiddleware:
                 ip = client[0] if client else "unknown"
             token = client_ip_var.set(ip)
             try:
-                await self._app(scope, receive, send)
+                if self._rest_app is not None and scope.get("path", "").startswith("/api/"):
+                    await self._rest_app(scope, receive, send)
+                else:
+                    await self._app(scope, receive, send)
             finally:
                 client_ip_var.reset(token)
         else:
@@ -351,7 +355,7 @@ mcp = FastMCP(
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Full company research report", readOnlyHint=True, destructiveHint=False))
-async def deeplook_research(company_name: str) -> str:
+async def deeplook_research(company_name: str, entity_type: str = "auto") -> str:
     """
     Deep company research. Returns comprehensive structured data: price, technicals
     (RSI-14, MA50/200, 52W range, volume ratio), financials (P/E, revenue, margins),
@@ -363,6 +367,13 @@ async def deeplook_research(company_name: str) -> str:
 
     Returns Markdown + structured JSON between <!-- STRUCTURED_DATA_START --> and
     <!-- STRUCTURED_DATA_END --> tags. Parse the JSON for programmatic access.
+
+    Args:
+        company_name: Company name or ticker symbol
+        entity_type: "stock", "crypto", or "auto" (default). Use "stock" for
+                     equities/ETFs, "crypto" for tokens. "auto" infers from input format.
+                     Tip: pass entity_type='crypto' for tokens or entity_type='stock'
+                     for equities to skip auto-detection.
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="research")
@@ -374,8 +385,9 @@ async def deeplook_research(company_name: str) -> str:
         )
         return rate_err
 
+    _entity_type = None if entity_type == "auto" else entity_type
     t0 = time.monotonic()
-    data = await run_research(company_name, use_llm=False)
+    data = await run_research(company_name, use_llm=False, entity_type=_entity_type)
     duration = round(time.monotonic() - t0, 1)
 
     _request_logger.info(
@@ -391,7 +403,7 @@ async def deeplook_research(company_name: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Quick company snapshot", readOnlyHint=True, destructiveHint=False))
-async def deeplook_lookup(company_name: str) -> str:
+async def deeplook_lookup(company_name: str, entity_type: str = "auto") -> str:
     """
     Quick company snapshot. Returns structured data: price, technicals (RSI-14,
     MA50/200, 52W range), financials (P/E, revenue, margins), peer comparison table,
@@ -399,6 +411,13 @@ async def deeplook_lookup(company_name: str) -> str:
 
     All numbers are extracted from APIs, not LLM-generated. Use the data to build
     your own analysis — present numbers visually in tables, write narrative in prose.
+
+    Args:
+        company_name: Company name or ticker symbol
+        entity_type: "stock", "crypto", or "auto" (default). Use "stock" for
+                     equities/ETFs, "crypto" for tokens. "auto" infers from input format.
+                     Tip: pass entity_type='crypto' for tokens or entity_type='stock'
+                     for equities to skip auto-detection.
     """
     ip = client_ip_var.get()
     rate_ok, rate_err = _rate_limiter.check_and_record(ip, tool_type="lookup")
@@ -410,8 +429,9 @@ async def deeplook_lookup(company_name: str) -> str:
         )
         return rate_err
 
+    _entity_type = None if entity_type == "auto" else entity_type
     t0 = time.monotonic()
-    data = await run_research(company_name, include_youtube=False, use_llm=False)
+    data = await run_research(company_name, include_youtube=False, use_llm=False, entity_type=_entity_type)
     duration = round(time.monotonic() - t0, 1)
 
     _request_logger.info(
@@ -424,7 +444,7 @@ async def deeplook_lookup(company_name: str) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Full research with LLM judgment", readOnlyHint=True, destructiveHint=False))
-async def deeplook_research_with_judgment(company_name: str) -> str:
+async def deeplook_research_with_judgment(company_name: str, entity_type: str = "auto") -> str:
     """
     Deep company research with LLM-generated analysis (compress + verdict).
     Requires an LLM API key configured on the server: ANTHROPIC_API_KEY,
@@ -435,6 +455,13 @@ async def deeplook_research_with_judgment(company_name: str) -> str:
 
     Returns Markdown + structured JSON between <!-- STRUCTURED_DATA_START -->
     and <!-- STRUCTURED_DATA_END --> tags.
+
+    Args:
+        company_name: Company name or ticker symbol
+        entity_type: "stock", "crypto", or "auto" (default). Use "stock" for
+                     equities/ETFs, "crypto" for tokens. "auto" infers from input format.
+                     Tip: pass entity_type='crypto' for tokens or entity_type='stock'
+                     for equities to skip auto-detection.
     """
     _has_key = any(
         os.environ.get(k)
@@ -457,8 +484,9 @@ async def deeplook_research_with_judgment(company_name: str) -> str:
         )
         return rate_err
 
+    _entity_type = None if entity_type == "auto" else entity_type
     t0 = time.monotonic()
-    data = await run_research(company_name, use_llm=True)
+    data = await run_research(company_name, use_llm=True, entity_type=_entity_type)
     duration = round(time.monotonic() - t0, 1)
 
     _request_logger.info(
@@ -483,8 +511,10 @@ def main():
     args = parser.parse_args()
 
     if args.http:
+        from deeplook.api import app as rest_app
         print(f"Starting DeepLook MCP (HTTP) on http://{args.host}:{args.port}/mcp", flush=True)
-        app = _ClientIPMiddleware(mcp.streamable_http_app())
+        print(f"Starting DeepLook REST API on http://{args.host}:{args.port}/api/v1", flush=True)
+        app = _ClientIPMiddleware(mcp.streamable_http_app(), rest_app=rest_app)
         uvicorn.run(app, host=args.host, port=args.port, forwarded_allow_ips="*")
     else:
         mcp.run(transport="stdio")

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,6 @@ description = "Company intelligence for AI agents — any company, one call"
 requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "AGPL-3.0"}
-
 dependencies = [
     "anthropic",
     "openai",
@@ -19,14 +18,26 @@ dependencies = [
     "duckduckgo-search>=6.0,<7.0",
     "yfinance",
     "mcp>=1.9.0",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
     "yt-dlp",
     "python-dotenv",
     "wikipedia-api",
+    "finnhub-python",
 ]
 
+[project.urls]
+Homepage = "https://github.com/OSOJDJD/deeplook"
+Repository = "https://github.com/OSOJDJD/deeplook"
+
 [project.scripts]
+deeplook = "deeplook.__main__:main"
 deeplook-mcp = "deeplook.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["deeplook*"]
+
+[tool.setuptools.package-data]
+"deeplook.data" = ["*.json"]
+"deeplook.prompts" = ["*"]

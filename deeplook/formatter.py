@@ -168,6 +168,79 @@ def format_lookup_markdown(data: dict) -> str:
     return "\n".join(lines)
 
 
+def _fmt_mcap(raw) -> str:
+    try:
+        v = float(raw)
+        if v >= 1e12: return f"${v / 1e12:.1f}T"
+        if v >= 1e9:  return f"${v / 1e9:.1f}B"
+        if v >= 1e6:  return f"${v / 1e6:.1f}M"
+        if v > 0:     return f"${v:,.0f}"
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
+def format_disambiguation_response(data: dict) -> str:
+    """Format a disambiguation response as markdown + embedded JSON.
+
+    Called when both yFinance and CoinGecko return valid matches for the same query.
+    The consuming LLM handles the 'which one did you mean?' UX.
+    """
+    import json as _json
+
+    query = data.get("query") or data.get("company", "")
+    matches = data.get("matches") or []
+
+    lines = [f'## Multiple matches found for "{query}"', ""]
+
+    for i, match in enumerate(matches, 1):
+        entity_type = match.get("entity_type", "")
+        name = match.get("name") or ""
+        ticker = match.get("ticker") or match.get("symbol") or ""
+        price = match.get("price")
+        mcap_raw = match.get("market_cap_raw", 0) or 0
+
+        label = "Stock" if entity_type == "public_equity" else "Crypto" if entity_type == "crypto" else entity_type.replace("_", " ").title()
+
+        parts = []
+        if price is not None:
+            try:
+                p = float(price)
+                if p >= 1000:
+                    parts.append(f"${p:,.0f}")
+                elif p >= 1:
+                    parts.append(f"${p:.2f}")
+                elif p >= 0.01:
+                    parts.append(f"${p:.4f}")
+                else:
+                    parts.append(f"${p:.6f}")
+            except (TypeError, ValueError):
+                pass
+        mcap_str = _fmt_mcap(mcap_raw)
+        if mcap_str:
+            parts.append(f"MCap {mcap_str}")
+
+        ticker_str = f" ({ticker})" if ticker and ticker != name else ""
+        details = " — " + ", ".join(parts) if parts else ""
+        lines.append(f"{i}. **{name}{ticker_str}** ({label}){details}")
+
+    lines += ["", "Please specify which entity you'd like to research."]
+
+    json_payload = {
+        "type": "disambiguation",
+        "query": query,
+        "matches": [
+            {**m, "market_cap": _fmt_mcap(m.get("market_cap_raw", 0))}
+            for m in matches
+        ],
+        "message": f"Multiple entities found for '{query}'. Please specify which one you'd like to research.",
+    }
+
+    markdown = "\n".join(lines)
+    json_str = _json.dumps(json_payload, indent=2, ensure_ascii=False, default=str)
+    return markdown + "\n\n<!-- STRUCTURED_DATA_START\n" + json_str + "\nSTRUCTURED_DATA_END -->\n"
+
+
 # ── Structured JSON + Dual Output ─────────────────────────────────────────
 
 def _safe_pct(val):

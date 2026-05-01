@@ -125,7 +125,7 @@
     "intended_type": "public_equity",
     "ticker": "TSM",
     "skip_yfinance": false,
-    "note": "TSMC (Taiwan Semiconductor) — use TSM ADR to avoid TWD currency mismatch"
+    "note": "TSMC (Taiwan Semiconductor) \u2014 use TSM ADR to avoid TWD currency mismatch"
   },
   "amd": {
     "intended_type": "public_equity",
@@ -359,7 +359,7 @@
     "intended_type": "public_equity",
     "ticker": "CRM",
     "skip_yfinance": false,
-    "note": "Salesforce Inc (NYSE:CRM), CRM platform — 'crm' would match crypto tokens"
+    "note": "Salesforce Inc (NYSE:CRM), CRM platform \u2014 'crm' would match crypto tokens"
   },
   "salesforce": {
     "intended_type": "public_equity",
@@ -371,7 +371,7 @@
     "intended_type": "public_equity",
     "ticker": "PATH",
     "skip_yfinance": false,
-    "note": "UiPath Inc (NYSE:PATH), RPA automation — 'path' would match crypto tokens"
+    "note": "UiPath Inc (NYSE:PATH), RPA automation \u2014 'path' would match crypto tokens"
   },
   "uipath": {
     "intended_type": "public_equity",
@@ -383,7 +383,7 @@
     "intended_type": "public_equity",
     "ticker": "NOW",
     "skip_yfinance": false,
-    "note": "ServiceNow Inc (NYSE:NOW), enterprise workflow platform — 'now' would match crypto tokens"
+    "note": "ServiceNow Inc (NYSE:NOW), enterprise workflow platform \u2014 'now' would match crypto tokens"
   },
   "servicenow": {
     "intended_type": "public_equity",
@@ -395,7 +395,7 @@
     "intended_type": "public_equity",
     "ticker": "NET",
     "skip_yfinance": false,
-    "note": "Cloudflare Inc (NYSE:NET), CDN and security — 'net' would match crypto tokens"
+    "note": "Cloudflare Inc (NYSE:NET), CDN and security \u2014 'net' would match crypto tokens"
   },
   "cloudflare": {
     "intended_type": "public_equity",
@@ -419,7 +419,7 @@
     "intended_type": "public_equity",
     "ticker": "APP",
     "skip_yfinance": false,
-    "note": "AppLovin Corp (NASDAQ:APP), mobile ad tech — 'app' would match generic terms"
+    "note": "AppLovin Corp (NASDAQ:APP), mobile ad tech \u2014 'app' would match generic terms"
   },
   "applovin": {
     "intended_type": "public_equity",
@@ -431,7 +431,7 @@
     "intended_type": "public_equity",
     "ticker": "MU",
     "skip_yfinance": false,
-    "note": "Micron Technology Inc (NASDAQ:MU), DRAM/NAND memory — 'mu' would match Greek letter / crypto tokens"
+    "note": "Micron Technology Inc (NASDAQ:MU), DRAM/NAND memory \u2014 'mu' would match Greek letter / crypto tokens"
   },
   "anthropic": {
     "intended_type": "private_or_unlisted",
@@ -444,5 +444,11 @@
     "ticker": null,
     "skip_yfinance": true,
     "note": "Perplexity AI, search company"
+  },
+  "btc": {
+    "intended_type": "crypto",
+    "coin_id": "bitcoin",
+    "skip_yfinance": true,
+    "note": "User wants Bitcoin (BTC), not Invesco Bitcoin ETF (BTCO/GBTC)"
   }
 }
