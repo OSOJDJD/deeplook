@@ -29,3 +29,12 @@ Added `deeplook/api.py` — a FastAPI app exposing `/api/v1/health`, `/api/v1/lo
 - `deeplook/api.py` — new file
 - `deeplook/mcp_server.py` — `_ClientIPMiddleware` accepts `rest_app`; `main()` wires it in
 - `pyproject.toml` — added `fastapi>=0.111.0`, `uvicorn[standard]>=0.29.0`
+
+---
+
+## Decision entries — 2026-05-01
+
+- **Entity detection 簡化**：移除 parallel check + disambiguation，改 format-based routing（ticker→stock, name→crypto）+ `entity_type` 參數 | 減少 false disambiguation，降低用戶困惑 | 放棄 disambiguation response type
+- **REST API alongside MCP**（`/api/v1/lookup`, `/api/v1/research`, `/api/v1/health`）| 開放給非 MCP 用戶（台灣 builder 社群）| 不開 `research_with_judgment`，per-IP 10/min rate limit
+- **Request logging to SQLite**（`api_requests.db`）| Usage data 追蹤，未來 product 決策用 | N/A
+- **VPS deploy 規則：pip install 必須用 `/root/deeplook/venv/bin/pip`** | 之前用 system pip 導致 `ModuleNotFoundError` crash | 寫入 `ops.md`
