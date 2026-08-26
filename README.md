@@ -11,13 +11,22 @@ LLMs hallucinate financial data. DeepLook gives them real numbers instead.
 
 ![DeepLook Analysis](docs/screenshot-analysis.png)
 
-DeepLook provides structured context — real-time data from 8 APIs combined with analytical instructions that makes better output. The result:
+DeepLook provides structured context — real-time data from 8+ APIs combined with analytical instructions that makes better output. The result:
 
 - **Accurate, up-to-date information** — not hallucinated numbers
 - **Clear at a glance** — financials, peers, technicals, news in one view
 - **Better AI output** — because good context drives good analysis
 
 Works for financial research, business due diligence, or any use case where you need to understand a company fast.
+
+---
+
+## Under the hood
+
+- **10+ sources, one call** — queries fan out in parallel across market data, filings, news, and more
+- **Rules before reasoning** — data is verified before the LLM ever sees it, which is what keeps hallucination down
+- **Eval-tested prompts** — changes get scored before they ship, not just shipped on vibes
+- **Agent-ready** — available as both an MCP server and a REST API
 
 ---
 
@@ -67,6 +76,21 @@ python -m deeplook.mcp_server
 | Private companies | Anthropic, Stripe, OpenAI |
 | VC firms | a16z, Sequoia |
 | Defunct | FTX, WeWork |
+
+---
+
+## Eval
+
+Tested across 58 companies, scored on accuracy, hallucination, and usefulness:
+
+| Metric | Score |
+|--------|-------|
+| Overall | 3.78 / 5.0 |
+| Risk detection | 4.36 / 5.0 |
+| Signal quality | 3.94 / 5.0 |
+| Actionability | 3.38 / 5.0 |
+
+*From an earlier pipeline version — re-run pending. Eval harness in [`/deeplook/eval`](deeplook/eval).*
 
 ---
 
